@@ -6,8 +6,8 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 
 - registers as a listed Kriegspiel bot
 - polls assigned games from the live API
-- can keep one open human-joinable lobby game advertised when under its active-game cap
-- can join another bot's waiting lobby game with 10% probability while still under its active-game cap
+- does not create waiting lobby games by default
+- can join another bot's waiting lobby game with 1% probability while still under its active-game cap
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
 - asks an Anthropic Haiku model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
@@ -31,8 +31,7 @@ The bot reads the live rules text from the sibling `content` repository:
 
 By default the registration email is `bot-haiku@kriegspiel.org`.
 
-By default the bot also keeps one open lobby game available for humans to join,
-but only while it has fewer than 1 active game. That behavior is controlled with:
+By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
 - `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any`
@@ -44,7 +43,7 @@ Bot-vs-bot play is also enabled by default:
 
 - the bot checks open waiting games
 - it will only consider games created by another bot
-- it will try to join one with 10% probability on a poll cycle
+- it will try to join one with 1% probability on a poll cycle
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps a local one-minute cooldown between bot-vs-bot join attempts to match backend rules
 
