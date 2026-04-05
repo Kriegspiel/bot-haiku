@@ -108,8 +108,10 @@ class BotTests(unittest.TestCase):
         self.assertTrue(any("Move attempt" in line for line in lines))
 
     def test_should_create_lobby_game_when_under_cap_and_no_waiting_game(self) -> None:
-        self.assertTrue(bot.should_create_lobby_game([]))
-        self.assertFalse(bot.should_create_lobby_game([{"state": "active"}]))
+        self.assertFalse(bot.should_create_lobby_game([]))
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME": "true"}):
+            self.assertTrue(bot.should_create_lobby_game([]))
+            self.assertFalse(bot.should_create_lobby_game([{"state": "active"}]))
 
     def test_should_not_create_lobby_game_when_waiting_game_exists(self) -> None:
         games = [{"state": "active"}, {"state": "waiting"}]
@@ -162,7 +164,7 @@ class BotTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
             with mock.patch.object(bot.random, "random", return_value=0.9):
                 self.assertIsNone(bot.choose_bot_game_to_join(games, rng=bot.random))
-            with mock.patch.object(bot.random, "random", return_value=0.05):
+            with mock.patch.object(bot.random, "random", return_value=0.005):
                 with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
                     with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
                         self.assertEqual(bot.choose_bot_game_to_join(games, rng=bot.random)["game_code"], "BOT123")
