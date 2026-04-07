@@ -35,7 +35,7 @@ DEFAULT_ANTHROPIC_OUTPUT_TOKENS = 512
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 1
 BOT_JOIN_COOLDOWN_SECONDS = 60
-BOT_GAME_PICK_PROBABILITY = 0.01
+BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -294,8 +294,6 @@ def choose_bot_game_to_join(open_games: list[dict[str, Any]], *, rng: random.Ran
     candidates = open_bot_lobby_candidates(open_games)
     if not candidates:
         return None
-    if rng.random() >= BOT_GAME_PICK_PROBABILITY:
-        return None
     return rng.choice(candidates)
 
 
@@ -309,12 +307,14 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
     candidate = choose_bot_game_to_join(open_games, rng=rng)
     if not candidate:
         return False
+    record_bot_join_attempt()
+    if rng.random() >= BOT_GAME_PICK_PROBABILITY:
+        return False
 
     game_code = candidate.get("game_code")
     if not isinstance(game_code, str) or not game_code.strip():
         return False
 
-    record_bot_join_attempt()
     joined = post_json(f"/api/game/join/{game_code.strip()}")
     logger.debug("joined bot lobby game %s (%s)", joined["game_id"], joined["game_code"])
     return True
