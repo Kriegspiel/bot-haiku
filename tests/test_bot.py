@@ -158,16 +158,43 @@ class BotTests(unittest.TestCase):
 
         self.assertEqual([game["game_code"] for game in candidates], ["BER123", "ANY123"])
 
-    def test_choose_bot_game_to_join_respects_probability(self) -> None:
+    def test_choose_bot_game_to_join_returns_candidate(self) -> None:
         games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
 
         with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
-            with mock.patch.object(bot.random, "random", return_value=0.9):
-                self.assertIsNone(bot.choose_bot_game_to_join(games, rng=bot.random))
-            with mock.patch.object(bot.random, "random", return_value=0.005):
-                with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
-                    with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
-                        self.assertEqual(bot.choose_bot_game_to_join(games, rng=bot.random)["game_code"], "BOT123")
+            with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
+                with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
+                    self.assertEqual(bot.choose_bot_game_to_join(games, rng=bot.random)["game_code"], "BOT123")
+
+    def test_maybe_join_bot_lobby_game_samples_once_per_cooldown_window(self) -> None:
+        games = []
+        open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
+
+        with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
+            with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
+                with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
+                    saved_states = []
+                    with mock.patch.object(bot, "save_state", side_effect=saved_states.append):
+                        with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
+                            with mock.patch.object(bot.random, "random", return_value=0.5):
+                                with mock.patch.object(bot, "post_json") as post_json:
+                                    self.assertFalse(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
+                                    post_json.assert_not_called()
+                        self.assertEqual(len(saved_states), 1)
+
+    def test_maybe_join_bot_lobby_game_joins_when_probability_hits(self) -> None:
+        games = []
+        open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
+
+        with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
+            with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
+                with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
+                    with mock.patch.object(bot, "save_state"):
+                        with mock.patch.object(bot.random, "choice", side_effect=lambda items: items[0]):
+                            with mock.patch.object(bot.random, "random", return_value=0.0005):
+                                with mock.patch.object(bot, "post_json", return_value={"game_id": "g1", "game_code": "BOT123"}) as post_json:
+                                    self.assertTrue(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
+                                    post_json.assert_called_once_with("/api/game/join/BOT123")
 
     def test_should_not_join_bot_lobby_game_when_active_cap_reached(self) -> None:
         games = [{"state": "active"} for _ in range(5)]
