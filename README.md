@@ -11,8 +11,8 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
 - asks an Anthropic Haiku model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
-- checks Anthropic availability with a tiny cached preflight call before taking a turn
-- skips the turn if Anthropic is unavailable or out of quota
+- checks Anthropic availability with a tiny cached preflight call before joining a new bot-vs-bot game
+- skips the join if Anthropic is unavailable or out of quota
 - still falls back safely if the model response itself is malformed
 
 ## Setup
