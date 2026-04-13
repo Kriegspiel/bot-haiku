@@ -330,6 +330,11 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
     if rng.random() >= BOT_GAME_PICK_PROBABILITY:
         return False
 
+    ready, reason = anthropic_preflight_status()
+    if not ready:
+        logger.warning("skipping bot-game join because Anthropic is unavailable (%s)", reason)
+        return False
+
     game_code = candidate.get("game_code")
     if not isinstance(game_code, str) or not game_code.strip():
         return False
@@ -833,12 +838,7 @@ def choose_ranked_actions(
     recent_updates: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[dict[str, str]] | None]:
     if not anthropic_enabled():
-        return [], "anthropic_unavailable", None
-
-    ready, reason = anthropic_preflight_status()
-    if not ready:
-        logger.warning("%s: skipping turn because Anthropic is unavailable (%s)", game_id, reason)
-        return [], "anthropic_unavailable", None
+        return fallback_ranked_actions(state), "fallback_no_anthropic_key", None
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
@@ -866,9 +866,7 @@ def choose_ranked_actions(
             return decisions, "model", persistable_conversation_messages(next_messages)
     except requests.RequestException as exc:
         reason = describe_http_error(exc)
-        cache_anthropic_preflight(False, reason=reason, ttl_seconds=anthropic_preflight_failure_ttl_seconds())
         logger.warning("model selection failed: %s", reason)
-        return [], "anthropic_unavailable", None
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("model selection failed: %s", exc)
 
@@ -1057,7 +1055,7 @@ def main() -> None:
     if not os.environ.get("KRIEGSPIEL_BOT_TOKEN"):
         raise SystemExit("KRIEGSPIEL_BOT_TOKEN is missing. Run with --register first.")
     if not anthropic_enabled():
-        logger.warning("ANTHROPIC_API_KEY is missing; the bot will skip turns until it is configured.")
+        logger.warning("ANTHROPIC_API_KEY is missing; bot-vs-bot joins will be skipped and turns will use fallback mode.")
 
     run_loop(args.poll_seconds)
 
