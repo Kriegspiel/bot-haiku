@@ -38,10 +38,13 @@ BOT_JOIN_COOLDOWN_SECONDS = 60
 BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
+DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
+DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+_ANTHROPIC_PREFLIGHT_CACHE = {"ready": None, "expires_at": 0.0, "reason": "unchecked"}
 
 
 def load_env_file(path: str | Path = ENV_PATH) -> None:
@@ -71,6 +74,22 @@ def anthropic_timeout_seconds() -> float:
         return max(5.0, float(raw))
     except ValueError:
         return 45.0
+
+
+def anthropic_preflight_success_ttl_seconds() -> float:
+    raw = os.environ.get("ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS", str(DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS)).strip()
+    try:
+        return max(5.0, float(raw))
+    except ValueError:
+        return DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS
+
+
+def anthropic_preflight_failure_ttl_seconds() -> float:
+    raw = os.environ.get("ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS", str(DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS)).strip()
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS
 
 
 def anthropic_cache_ttl() -> str:
@@ -587,6 +606,73 @@ def anthropic_enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
 
+def cache_anthropic_preflight(ready: bool, *, reason: str, ttl_seconds: float) -> tuple[bool, str]:
+    _ANTHROPIC_PREFLIGHT_CACHE["ready"] = ready
+    _ANTHROPIC_PREFLIGHT_CACHE["reason"] = reason
+    _ANTHROPIC_PREFLIGHT_CACHE["expires_at"] = time.time() + max(0.0, ttl_seconds)
+    return ready, reason
+
+
+def describe_http_error(exc: requests.RequestException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc) or exc.__class__.__name__
+
+    pieces = [f"http_{response.status_code}"]
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            for key in ("type", "code", "message"):
+                value = error.get(key)
+                if value:
+                    pieces.append(str(value))
+        detail = payload.get("detail")
+        if isinstance(detail, str) and detail:
+            pieces.append(detail)
+    elif response.text:
+        pieces.append(response.text.strip())
+
+    return ": ".join(dict.fromkeys(piece for piece in pieces if piece))
+
+
+def anthropic_preflight_status(force: bool = False) -> tuple[bool, str]:
+    if not anthropic_enabled():
+        return cache_anthropic_preflight(False, reason="missing_anthropic_api_key", ttl_seconds=anthropic_preflight_failure_ttl_seconds())
+
+    now = time.time()
+    if not force and _ANTHROPIC_PREFLIGHT_CACHE["ready"] is not None and now < float(_ANTHROPIC_PREFLIGHT_CACHE["expires_at"]):
+        return bool(_ANTHROPIC_PREFLIGHT_CACHE["ready"]), str(_ANTHROPIC_PREFLIGHT_CACHE["reason"])
+
+    try:
+        response = requests.post(
+            f"{anthropic_base_url()}/messages",
+            headers={
+                "x-api-key": os.environ["ANTHROPIC_API_KEY"].strip(),
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip(),
+                "max_tokens": 1,
+                "system": "Reply with OK.",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "Ping"}]}],
+            },
+            timeout=anthropic_timeout_seconds(),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        reason = describe_http_error(exc)
+        logger.warning("anthropic preflight failed: %s", reason)
+        return cache_anthropic_preflight(False, reason=reason, ttl_seconds=anthropic_preflight_failure_ttl_seconds())
+
+    return cache_anthropic_preflight(True, reason="ok", ttl_seconds=anthropic_preflight_success_ttl_seconds())
+
+
 def call_anthropic_messages(
     *,
     system_prompt: str,
@@ -747,7 +833,12 @@ def choose_ranked_actions(
     recent_updates: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[dict[str, str]] | None]:
     if not anthropic_enabled():
-        return fallback_ranked_actions(state), "fallback_no_anthropic_key", None
+        return [], "anthropic_unavailable", None
+
+    ready, reason = anthropic_preflight_status()
+    if not ready:
+        logger.warning("%s: skipping turn because Anthropic is unavailable (%s)", game_id, reason)
+        return [], "anthropic_unavailable", None
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
@@ -773,7 +864,12 @@ def choose_ranked_actions(
         if decisions:
             next_messages = messages + [{"role": "assistant", "content": [{"type": "text", "text": assistant_text}]}]
             return decisions, "model", persistable_conversation_messages(next_messages)
-    except (KeyError, ValueError, json.JSONDecodeError, requests.RequestException) as exc:
+    except requests.RequestException as exc:
+        reason = describe_http_error(exc)
+        cache_anthropic_preflight(False, reason=reason, ttl_seconds=anthropic_preflight_failure_ttl_seconds())
+        logger.warning("model selection failed: %s", reason)
+        return [], "anthropic_unavailable", None
+    except (KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("model selection failed: %s", exc)
 
     return fallback_ranked_actions(state), "fallback", None
@@ -961,7 +1057,7 @@ def main() -> None:
     if not os.environ.get("KRIEGSPIEL_BOT_TOKEN"):
         raise SystemExit("KRIEGSPIEL_BOT_TOKEN is missing. Run with --register first.")
     if not anthropic_enabled():
-        logger.warning("ANTHROPIC_API_KEY is missing; running in fallback mode.")
+        logger.warning("ANTHROPIC_API_KEY is missing; the bot will skip turns until it is configured.")
 
     run_loop(args.poll_seconds)
 

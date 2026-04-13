@@ -7,6 +7,9 @@ import bot
 
 
 class BotTests(unittest.TestCase):
+    def setUp(self) -> None:
+        bot._ANTHROPIC_PREFLIGHT_CACHE.update({"ready": None, "expires_at": 0.0, "reason": "unchecked"})
+
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
         decisions = bot.normalize_ranked_decisions(
@@ -204,6 +207,29 @@ class BotTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "gptnano"}):
             self.assertTrue(bot.has_own_waiting_game([{"game_code": "ABC123", "created_by": "gptnano"}]))
             self.assertFalse(bot.has_own_waiting_game([{"game_code": "XYZ789", "created_by": "randobot"}]))
+
+    def test_anthropic_preflight_status_caches_success(self) -> None:
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+            with mock.patch.object(bot.requests, "post", return_value=response) as post:
+                self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
+                self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
+        self.assertEqual(post.call_count, 1)
+
+    def test_choose_ranked_actions_skips_turn_when_anthropic_unavailable(self) -> None:
+        state = {
+            "rule_variant": "berkeley_any",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+            with mock.patch.object(bot, "anthropic_preflight_status", return_value=(False, "http_429: credit_balance_too_low")):
+                decisions, source, conversation = bot.choose_ranked_actions(state, game_id="game-1")
+        self.assertEqual(decisions, [])
+        self.assertEqual(source, "anthropic_unavailable")
+        self.assertIsNone(conversation)
 
 
 if __name__ == "__main__":
