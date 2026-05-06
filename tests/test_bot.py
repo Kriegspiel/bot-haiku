@@ -199,7 +199,7 @@ class BotTests(unittest.TestCase):
                                     with mock.patch.object(bot, "anthropic_preflight_status", return_value=(True, "ok")):
                                         with mock.patch.object(bot, "post_json", return_value={"game_id": "g1", "game_code": "BOT123"}) as post_json:
                                             self.assertTrue(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
-                                            post_json.assert_called_once_with("/api/game/join/BOT123")
+                                            post_json.assert_called_once_with("/game/join/BOT123")
 
     def test_should_not_join_bot_lobby_game_when_active_cap_reached(self) -> None:
         games = [{"state": "active"} for _ in range(5)]

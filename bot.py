@@ -170,7 +170,7 @@ def maybe_restore_token() -> None:
 
 def register_bot() -> None:
     response = requests.post(
-        f"{base_url()}/api/auth/bots/register",
+        f"{base_url()}/auth/bots/register",
         headers={"X-Bot-Registration-Key": os.environ["KRIEGSPIEL_BOT_REGISTRATION_KEY"]},
         json={
             "username": os.environ.get("KRIEGSPIEL_BOT_USERNAME", "haiku"),
@@ -198,7 +198,7 @@ def get_json(path: str) -> dict[str, Any]:
 
 
 def get_public_user(username: str) -> dict[str, Any]:
-    response = requests.get(f"{base_url()}/api/user/{username}", headers=auth_headers(), timeout=DEFAULT_TIMEOUT_SECONDS)
+    response = requests.get(f"{base_url()}/user/{username}", headers=auth_headers(), timeout=DEFAULT_TIMEOUT_SECONDS)
     response.raise_for_status()
     return response.json()
 
@@ -322,7 +322,7 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
     if not can_attempt_bot_join():
         return False
 
-    open_games = get_json("/api/game/open").get("games", [])
+    open_games = get_json("/game/open").get("games", [])
     candidate = choose_bot_game_to_join(open_games, rng=rng)
     if not candidate:
         return False
@@ -339,7 +339,7 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
     if not isinstance(game_code, str) or not game_code.strip():
         return False
 
-    joined = post_json(f"/api/game/join/{game_code.strip()}")
+    joined = post_json(f"/game/join/{game_code.strip()}")
     logger.debug("joined bot lobby game %s (%s)", joined["game_id"], joined["game_code"])
     return True
 
@@ -356,11 +356,11 @@ def maybe_create_lobby_game(games: list[dict[str, Any]]) -> bool:
     if not should_create_lobby_game(games):
         return False
 
-    open_games = get_json("/api/game/open").get("games", [])
+    open_games = get_json("/game/open").get("games", [])
     if has_own_waiting_game(open_games):
         return False
 
-    created = post_json("/api/game/create", create_payload())
+    created = post_json("/game/create", create_payload())
     logger.debug("created lobby game %s (%s)", created["game_id"], created["game_code"])
     return True
 
@@ -880,14 +880,14 @@ def format_action(decision: dict[str, Any]) -> str:
 
 
 def maybe_play_game(game_id: str) -> bool:
-    metadata = get_json(f"/api/game/{game_id}")
+    metadata = get_json(f"/game/{game_id}")
     feedback: list[str] = []
     tried_actions: list[dict[str, Any]] = []
     acted = False
     conversation = get_conversation_state(game_id)
 
     for _batch in range(max_model_batches_per_turn()):
-        state = get_json(f"/api/game/{game_id}/state")
+        state = get_json(f"/game/{game_id}/state")
         if state.get("state") != "active" or state.get("turn") != state.get("your_color"):
             return acted
         if isinstance(metadata.get("rule_variant"), str):
@@ -928,11 +928,11 @@ def maybe_play_game(game_id: str) -> bool:
         for decision in decisions:
             tried_actions.append(decision)
             if decision["action"] == "move":
-                result = post_json(f"/api/game/{game_id}/move", {"uci": decision["uci"]})
+                result = post_json(f"/game/{game_id}/move", {"uci": decision["uci"]})
                 acted = acted or bool(result.get("move_done"))
                 logger.debug("%s: %s move %s -> %s", game_id, source, decision["uci"], result["announcement"])
                 if result.get("move_done"):
-                    state_after = get_json(f"/api/game/{game_id}/state")
+                    state_after = get_json(f"/game/{game_id}/state")
                     if isinstance(metadata.get("rule_variant"), str):
                         state_after["rule_variant"] = metadata["rule_variant"]
                     scoresheet_after = state_after.get("scoresheet") if isinstance(state_after.get("scoresheet"), dict) else {}
@@ -954,10 +954,10 @@ def maybe_play_game(game_id: str) -> bool:
                 feedback.append(f"Rejected move {decision['uci']}: {result.get('announcement')}")
                 continue
 
-            result = post_json(f"/api/game/{game_id}/ask-any")
+            result = post_json(f"/game/{game_id}/ask-any")
             acted = acted or bool(result.get("move_done"))
             logger.debug("%s: %s ask-any -> %s", game_id, source, result["announcement"])
-            state_after = get_json(f"/api/game/{game_id}/state")
+            state_after = get_json(f"/game/{game_id}/state")
             if isinstance(metadata.get("rule_variant"), str):
                 state_after["rule_variant"] = metadata["rule_variant"]
             scoresheet_after = state_after.get("scoresheet") if isinstance(state_after.get("scoresheet"), dict) else {}
@@ -989,7 +989,7 @@ def maybe_play_game(game_id: str) -> bool:
             break
 
         if not batch_success:
-            refreshed_state = get_json(f"/api/game/{game_id}/state")
+            refreshed_state = get_json(f"/game/{game_id}/state")
             if isinstance(metadata.get("rule_variant"), str):
                 refreshed_state["rule_variant"] = metadata["rule_variant"]
             refreshed_scoresheet = refreshed_state.get("scoresheet") if isinstance(refreshed_state.get("scoresheet"), dict) else {}
@@ -1021,7 +1021,7 @@ def maybe_play_game(game_id: str) -> bool:
 def run_loop(poll_seconds: float) -> None:
     while True:
         try:
-            mine = get_json("/api/game/mine")
+            mine = get_json("/game/mine")
             games = mine.get("games", [])
             active_game_ids = {game.get("game_id") for game in active_games(games)}
             state = load_state()
@@ -1045,7 +1045,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run the Kriegspiel Haiku bot.")
     parser.add_argument("--register", action="store_true", help="Register the bot and persist the returned token.")
-    parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /api/game/mine polls.")
+    parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine polls.")
     args = parser.parse_args()
 
     if args.register:
