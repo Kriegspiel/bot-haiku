@@ -19,7 +19,6 @@ import logging
 import os
 import random
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -40,11 +39,13 @@ DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
+DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 _ANTHROPIC_PREFLIGHT_CACHE = {"ready": None, "expires_at": 0.0, "reason": "unchecked"}
+_MODEL_AVAILABILITY_REPORT_CACHE = {"ready": None, "reason": "", "reported_at": 0.0}
 
 
 def load_env_file(path: str | Path = ENV_PATH) -> None:
@@ -90,6 +91,17 @@ def anthropic_preflight_failure_ttl_seconds() -> float:
         return max(1.0, float(raw))
     except ValueError:
         return DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS
+
+
+def model_availability_report_interval_seconds() -> float:
+    raw = os.environ.get(
+        "MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS",
+        str(DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS),
+    ).strip()
+    try:
+        return max(5.0, float(raw))
+    except ValueError:
+        return DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS
 
 
 def anthropic_cache_ttl() -> str:
@@ -212,6 +224,35 @@ def post_json(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any
     )
     response.raise_for_status()
     return response.json()
+
+
+def report_model_availability(ready: bool, reason: str, *, force: bool = False) -> bool:
+    now = time.time()
+    cached_ready = _MODEL_AVAILABILITY_REPORT_CACHE["ready"]
+    cached_reason = str(_MODEL_AVAILABILITY_REPORT_CACHE["reason"])
+    reported_at = float(_MODEL_AVAILABILITY_REPORT_CACHE["reported_at"])
+    if (
+        not force
+        and cached_ready is bool(ready)
+        and cached_reason == reason
+        and now - reported_at < model_availability_report_interval_seconds()
+    ):
+        return False
+
+    try:
+        post_json("/bots/availability", {"provider": "anthropic", "ready": bool(ready), "reason": reason})
+    except requests.RequestException as exc:
+        logger.warning("failed to report Anthropic availability: %s", exc)
+        return False
+
+    _MODEL_AVAILABILITY_REPORT_CACHE.update({"ready": bool(ready), "reason": reason, "reported_at": now})
+    return True
+
+
+def report_current_model_availability() -> tuple[bool, str]:
+    ready, reason = anthropic_preflight_status()
+    report_model_availability(ready, reason)
+    return ready, reason
 
 
 def auto_create_enabled() -> bool:
@@ -1021,6 +1062,7 @@ def maybe_play_game(game_id: str) -> bool:
 def run_loop(poll_seconds: float) -> None:
     while True:
         try:
+            report_current_model_availability()
             mine = get_json("/game/mine/active")
             games = mine.get("games", [])
             active_game_ids = {game.get("game_id") for game in active_games(games)}
