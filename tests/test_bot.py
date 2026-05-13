@@ -9,6 +9,7 @@ import bot
 class BotTests(unittest.TestCase):
     def setUp(self) -> None:
         bot._ANTHROPIC_PREFLIGHT_CACHE.update({"ready": None, "expires_at": 0.0, "reason": "unchecked"})
+        bot._MODEL_AVAILABILITY_REPORT_CACHE.update({"ready": None, "reason": "", "reported_at": 0.0})
 
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
@@ -218,6 +219,20 @@ class BotTests(unittest.TestCase):
                 self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
                 self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
         self.assertEqual(post.call_count, 1)
+
+    def test_report_model_availability_posts_status_and_throttles_repeats(self) -> None:
+        with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
+            self.assertTrue(bot.report_model_availability(False, "http_400: usage_limit"))
+            self.assertFalse(bot.report_model_availability(False, "http_400: usage_limit"))
+            self.assertTrue(bot.report_model_availability(True, "ok"))
+
+        self.assertEqual(
+            post_json.call_args_list,
+            [
+                mock.call("/bots/availability", {"provider": "anthropic", "ready": False, "reason": "http_400: usage_limit"}),
+                mock.call("/bots/availability", {"provider": "anthropic", "ready": True, "reason": "ok"}),
+            ],
+        )
 
     def test_maybe_join_bot_lobby_game_skips_join_when_anthropic_unavailable(self) -> None:
         games = []
