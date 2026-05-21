@@ -186,6 +186,28 @@ class BotTests(unittest.TestCase):
                                     post_json.assert_not_called()
                         self.assertEqual(len(saved_states), 1)
 
+    def test_maybe_join_bot_lobby_game_records_sample_even_without_candidate(self) -> None:
+        games = []
+
+        with mock.patch.object(bot, "get_json", return_value={"games": []}):
+            with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
+                saved_states = []
+                with mock.patch.object(bot, "save_state", side_effect=saved_states.append):
+                    with mock.patch.object(bot, "post_json") as post_json:
+                        self.assertFalse(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
+                        post_json.assert_not_called()
+
+        self.assertEqual(len(saved_states), 1)
+
+    def test_maybe_join_bot_lobby_game_skips_open_sample_during_cooldown(self) -> None:
+        games = []
+
+        with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 100}):
+            with mock.patch.object(bot.time, "time", return_value=130):
+                with mock.patch.object(bot, "get_json") as get_json:
+                    self.assertFalse(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
+                    get_json.assert_not_called()
+
     def test_maybe_join_bot_lobby_game_joins_when_probability_hits(self) -> None:
         games = []
         open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]

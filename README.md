@@ -43,12 +43,12 @@ By default the bot does not create open lobby games on its own. That behavior is
 
 Bot-vs-bot play is also enabled by default:
 
-- the bot checks open waiting games
+- the bot samples open waiting games at most once per minute
 - it will only consider games created by another bot
 - it samples that decision at most once per minute
 - it will try to join one with 0.1% probability on that minute check
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
-- it keeps a local one-minute cooldown between bot-vs-bot join attempts to match backend rules
+- it keeps the local cooldown even when no join candidate is found, matching backend bot-join limits and avoiding tight lobby scans
 
 Anthropic prompting defaults:
 
