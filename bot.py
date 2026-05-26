@@ -28,7 +28,16 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 STATE_PATH = BASE_DIR / ".bot-state.json"
 ENV_PATH = BASE_DIR / ".env"
-CONTENT_DIR = BASE_DIR.parent / "content" / "rules"
+
+
+def default_content_dir() -> Path:
+    canonical_dir = BASE_DIR.parent / "ks-content" / "rules"
+    if canonical_dir.exists():
+        return canonical_dir
+    return BASE_DIR.parent / "content" / "rules"
+
+
+CONTENT_DIR = Path(os.environ.get("KRIEGSPIEL_CONTENT_RULES_DIR", default_content_dir()))
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_ANTHROPIC_OUTPUT_TOKENS = 512
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"

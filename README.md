@@ -26,10 +26,12 @@ python bot.py --register
 python bot.py
 ```
 
-The bot reads the live rules text from the sibling `content` repository:
+The bot reads the live rules text from the sibling `ks-content` repository:
 
-- `content/rules/berkeley.md`
-- `content/rules/README.md`
+- `ks-content/rules/berkeley.md`
+- `ks-content/rules/README.md`
+
+Set `KRIEGSPIEL_CONTENT_RULES_DIR` to override that rules directory.
 
 By default the registration email is `bot-haiku@kriegspiel.org`.
 
