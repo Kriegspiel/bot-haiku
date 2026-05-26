@@ -31,10 +31,7 @@ ENV_PATH = BASE_DIR / ".env"
 
 
 def default_content_dir() -> Path:
-    canonical_dir = BASE_DIR.parent / "ks-content" / "rules"
-    if canonical_dir.exists():
-        return canonical_dir
-    return BASE_DIR.parent / "content" / "rules"
+    return BASE_DIR.parent / "ks-content" / "rules"
 
 
 CONTENT_DIR = Path(os.environ.get("KRIEGSPIEL_CONTENT_RULES_DIR", default_content_dir()))
