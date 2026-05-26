@@ -60,16 +60,12 @@ class BotTests(unittest.TestCase):
         decisions = bot.fallback_ranked_actions(state)
         self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}])
 
-    def test_default_content_dir_prefers_ks_content_and_falls_back(self) -> None:
+    def test_default_content_dir_uses_ks_content_rules(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir) / "bot-haiku"
             canonical_rules = Path(temp_dir) / "ks-content" / "rules"
-            legacy_rules = Path(temp_dir) / "content" / "rules"
             base_dir.mkdir()
-            legacy_rules.mkdir(parents=True)
             with mock.patch.object(bot, "BASE_DIR", base_dir):
-                self.assertEqual(bot.default_content_dir(), legacy_rules)
-                canonical_rules.mkdir(parents=True)
                 self.assertEqual(bot.default_content_dir(), canonical_rules)
 
     def test_build_prompts_split_rules_and_state(self) -> None:
