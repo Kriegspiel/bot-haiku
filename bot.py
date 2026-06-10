@@ -28,13 +28,7 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 STATE_PATH = BASE_DIR / ".bot-state.json"
 ENV_PATH = BASE_DIR / ".env"
-
-
-def default_content_dir() -> Path:
-    return BASE_DIR.parent / "ks-content" / "rules"
-
-
-CONTENT_DIR = Path(os.environ.get("KRIEGSPIEL_CONTENT_RULES_DIR", default_content_dir()))
+RULESET_SUMMARY_DIR = BASE_DIR / "ruleset_summaries"
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_ANTHROPIC_OUTPUT_TOKENS = 512
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"
@@ -43,9 +37,13 @@ BOT_JOIN_COOLDOWN_SECONDS = 60
 BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
+DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS = 10
 DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
+SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
+DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
+LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
@@ -209,6 +207,15 @@ def register_bot() -> None:
     logger.debug("%s", json.dumps(payload, indent=2))
 
 
+def sync_bot_profile() -> bool:
+    try:
+        post_json("/bots/profile", {"supported_rule_variants": supported_rule_variants()})
+    except requests.RequestException as exc:
+        logger.warning("failed to sync bot profile: %s", exc)
+        return False
+    return True
+
+
 def get_json(path: str) -> dict[str, Any]:
     response = requests.get(f"{base_url()}{path}", headers=auth_headers(), timeout=DEFAULT_TIMEOUT_SECONDS)
     response.raise_for_status()
@@ -284,13 +291,15 @@ def create_payload() -> dict[str, str]:
 
 
 def supported_rule_variants() -> list[str]:
-    raw = os.environ.get("KRIEGSPIEL_SUPPORTED_RULE_VARIANTS", "berkeley,berkeley_any")
+    raw = os.environ.get("KRIEGSPIEL_SUPPORTED_RULE_VARIANTS", DEFAULT_SUPPORTED_RULE_VARIANTS)
     variants: list[str] = []
     for item in raw.split(","):
         value = item.strip()
-        if value in {"berkeley", "berkeley_any"} and value not in variants:
+        if value in SUPPORTED_RULE_VARIANTS and value not in variants:
             variants.append(value)
-    return variants or ["berkeley", "berkeley_any"]
+    if tuple(variants) == LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS:
+        return list(SUPPORTED_RULE_VARIANTS)
+    return variants or list(SUPPORTED_RULE_VARIANTS)
 
 
 def active_games(games: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -412,55 +421,31 @@ def maybe_create_lobby_game(games: list[dict[str, Any]]) -> bool:
     return True
 
 
-def strip_frontmatter(text: str) -> str:
-    if not text.startswith("---\n"):
-        return text.strip()
-    parts = text.split("\n---\n", 1)
-    return parts[1].strip() if len(parts) == 2 else text.strip()
-
-
-def _variant_any_rule_excerpt() -> str:
-    readme = (CONTENT_DIR / "README.md").read_text()
-    lines = []
-    for line in readme.splitlines():
-        if line.startswith("| Berkeley + Any"):
-            lines.append(line.strip())
-    return "\n".join(lines)
-
-
-@lru_cache(maxsize=4)
-def load_rules_text(rule_variant: str) -> str:
-    berkeley = strip_frontmatter((CONTENT_DIR / "berkeley.md").read_text())
-    if rule_variant == "berkeley_any":
-        any_excerpt = _variant_any_rule_excerpt()
-        appendix = (
-            "\n\nAdditional variant note for Berkeley + Any:\n"
-            "The current game allows the special 'Any?' action. "
-            "If the referee says there are pawn captures, the player must make one.\n"
-        )
-        if any_excerpt:
-            appendix += f"\nRules comparison excerpt:\n{any_excerpt}\n"
-        return berkeley + appendix
-    return berkeley
+def recent_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> list[dict[str, Any]]:
+    turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
+    recent_turns = turns[-max_turns:]
+    payload: list[dict[str, Any]] = []
+    for turn in recent_turns:
+        item: dict[str, Any] = {"turn": turn.get("turn")}
+        for color in ("white", "black"):
+            entries = turn.get(color) if isinstance(turn.get(color), list) else []
+            item[color] = [
+                normalized
+                for normalized in (normalize_scoresheet_entry(entry) for entry in entries)
+                if normalized
+            ]
+        payload.append(item)
+    return payload
 
 
 def summarize_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> list[str]:
-    viewer_color = scoresheet.get("viewer_color", "unknown")
-    turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
-    recent_turns = turns[-max_turns:]
-    lines = [f"Viewer color: {viewer_color}", f"Recent turns kept: {len(recent_turns)}"]
-
-    for turn in recent_turns:
+    lines: list[str] = []
+    for turn in recent_scoresheet_turns(scoresheet, max_turns=max_turns):
         turn_number = turn.get("turn")
-        lines.append(f"Turn {turn_number}:")
         for color in ("white", "black"):
             entries = turn.get(color) if isinstance(turn.get(color), list) else []
-            if not entries:
-                continue
             for entry in entries:
-                normalized = normalize_scoresheet_entry(entry)
-                if normalized:
-                    lines.append(f"- {color}: {normalized}")
+                lines.append(f"Turn {turn_number} {color}: {entry}")
     return lines
 
 
@@ -502,6 +487,14 @@ def max_model_batches_per_turn() -> int:
         return max(1, min(20, int(raw)))
     except ValueError:
         return DEFAULT_MAX_MODEL_BATCHES_PER_TURN
+
+
+def anthropic_max_prompt_turns() -> int:
+    raw = os.environ.get("ANTHROPIC_MAX_PROMPT_TURNS", str(DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS)).strip()
+    try:
+        return max(DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS, int(raw))
+    except ValueError:
+        return DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS
 
 
 def extract_recent_referee_items(scoresheet: dict[str, Any], *, limit: int = 8) -> list[str]:
@@ -546,52 +539,113 @@ def new_recent_items(previous: list[str], current: list[str]) -> list[str]:
     return current[best_overlap:]
 
 
+@lru_cache(maxsize=len(SUPPORTED_RULE_VARIANTS) + 1)
+def load_ruleset_summary(rule_variant: str) -> str:
+    variant = rule_variant if rule_variant in SUPPORTED_RULE_VARIANTS else "berkeley_any"
+    return (RULESET_SUMMARY_DIR / f"{variant}.md").read_text(encoding="utf-8").strip()
+
+
 def build_system_prompt(rule_variant: str) -> str:
-    rules_text = load_rules_text(rule_variant)
+    rules_summary = load_ruleset_summary(rule_variant)
     return (
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
-        "Return unique candidate actions ordered strictly from best to worse priority.\n"
+        "Return exactly target_count unique JSON candidate actions ordered strictly from best to worst priority.\n"
         "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
         "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
+        "If action=move, uci must exactly match one allowed_moves item.\n"
+        "If action=ask_any, uci must be null.\n"
         "Do not explain the rules. Do not include prose outside the JSON schema.\n\n"
-        "Rules and setting:\n"
-        f"Rule variant: {rule_variant}\n"
-        f"{rules_text}\n"
+        f"{rules_summary}\n"
     )
 
 
-def build_initial_user_prompt(
+def _prompt_material_summary(state: dict[str, Any]) -> dict[str, dict[str, int]]:
+    material = state.get("material_summary") if isinstance(state.get("material_summary"), dict) else {}
+    payload: dict[str, dict[str, int]] = {}
+    for color in ("white", "black"):
+        side = material.get(color) if isinstance(material.get(color), dict) else {}
+        if not side:
+            continue
+        item: dict[str, int] = {}
+        pieces_remaining = side.get("pieces_remaining")
+        if isinstance(pieces_remaining, int):
+            item["pieces_remaining"] = pieces_remaining
+        pawns_captured = side.get("pawns_captured")
+        if isinstance(pawns_captured, int):
+            item["pawns_captured"] = pawns_captured
+        if item:
+            payload[color] = item
+    return payload
+
+
+def _prompt_reserve_summary(state: dict[str, Any], *, rule_variant: str) -> dict[str, dict[str, int]]:
+    if rule_variant != "crazykrieg":
+        return {}
+    reserves = state.get("reserve_summary") if isinstance(state.get("reserve_summary"), dict) else {}
+    payload: dict[str, dict[str, int]] = {}
+    for color in ("white", "black"):
+        side = reserves.get(color) if isinstance(reserves.get(color), dict) else {}
+        if side:
+            payload[color] = {
+                piece: int(side.get(piece, 0) or 0)
+                for piece in ("pawns", "knights", "bishops", "rooks", "queens")
+            }
+    return payload
+
+
+def build_turn_snapshot_payload(
     state: dict[str, Any],
-) -> str:
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rule_variant = str(state.get("rule_variant") or "berkeley_any")
     scoresheet = state.get("scoresheet") if isinstance(state.get("scoresheet"), dict) else {}
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
-    max_prompt_turns = int(os.environ.get("ANTHROPIC_MAX_PROMPT_TURNS", "12"))
-    scoresheet_text = summarize_scoresheet_turns(scoresheet, max_turns=max_prompt_turns)
-    recent_referee = extract_recent_referee_items(scoresheet, limit=6)
-    target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
-    payload = {
-        "phase": "initial_turn_snapshot",
+    available_action_count = len(allowed_moves) + (1 if "ask_any" in possible_actions else 0)
+    target_count = min(model_batch_size(), available_action_count)
+    payload: dict[str, Any] = {
         "your_color": state.get("your_color"),
-        "game_state": state.get("state"),
         "turn": state.get("turn"),
         "move_number": state.get("move_number"),
         "private_board_fen": state.get("your_fen"),
+        "material": _prompt_material_summary(state),
+        "recent_turns": recent_scoresheet_turns(scoresheet, max_turns=anthropic_max_prompt_turns()),
         "possible_actions": possible_actions,
         "allowed_moves": allowed_moves,
-        "recent_scoresheet_lines": scoresheet_text[-12:],
-        "recent_referee_items": recent_referee,
         "target_count": target_count,
     }
-    return (
-        "Current private state JSON follows.\n"
-        "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
-        "If action=move, uci must be one of allowed_moves exactly.\n"
-        "If action=ask_any, uci must be null.\n\n"
-        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+    reserves = _prompt_reserve_summary(state, rule_variant=rule_variant)
+    if reserves:
+        payload["reserves"] = reserves
+    rejected = [format_action(item) for item in (exclude_actions or [])[-20:]]
+    if rejected:
+        payload["rejected_this_turn"] = rejected
+    retry_feedback = [item for item in (feedback or [])[-6:] if item]
+    if retry_feedback:
+        payload["retry_feedback"] = retry_feedback
+    return payload
+
+
+def build_turn_snapshot_user_prompt(
+    state: dict[str, Any],
+    *,
+    feedback: list[str] | None = None,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> str:
+    payload = build_turn_snapshot_payload(
+        state,
+        feedback=feedback,
+        exclude_actions=exclude_actions,
     )
+    return f"Current turn JSON:\n{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+
+
+def build_initial_user_prompt(state: dict[str, Any]) -> str:
+    return build_turn_snapshot_user_prompt(state)
 
 
 def build_followup_user_prompt(
@@ -601,27 +655,11 @@ def build_followup_user_prompt(
     exclude_actions: list[dict[str, Any]] | None = None,
     recent_updates: list[str] | None = None,
 ) -> str:
-    allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
-    possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
-    target_count = min(model_batch_size(), max(len(allowed_moves), 1 if "ask_any" in possible_actions else 0))
-    payload = {
-        "phase": "turn_update",
-        "turn": state.get("turn"),
-        "move_number": state.get("move_number"),
-        "possible_actions": possible_actions,
-        "allowed_moves": allowed_moves,
-        "new_scoresheet_items": (recent_updates or [])[-10:],
-        "feedback_this_turn": (feedback or [])[-6:],
-        "already_tried_this_turn": [format_action(item) for item in (exclude_actions or [])[-20:]],
-        "target_count": target_count,
-    }
-    return (
-        "Update since your last ranked list JSON follows.\n"
-        "Use the new_scoresheet_items and feedback_this_turn to avoid stale ideas.\n"
-        "Return exactly target_count unique candidates when possible, ordered from best to worse priority.\n"
-        "If action=move, uci must be one of allowed_moves exactly.\n"
-        "If action=ask_any, uci must be null.\n\n"
-        f"{json.dumps(payload, separators=(',', ':'), ensure_ascii=True, sort_keys=True)}"
+    _ = recent_updates
+    return build_turn_snapshot_user_prompt(
+        state,
+        feedback=feedback,
+        exclude_actions=exclude_actions,
     )
 
 
@@ -642,9 +680,8 @@ def action_schema() -> dict[str, Any]:
                         "properties": {
                             "action": {"type": "string", "enum": ["move", "ask_any"]},
                             "uci": {"type": ["string", "null"]},
-                            "reason": {"type": "string"},
                         },
-                        "required": ["action", "uci", "reason"],
+                        "required": ["action", "uci"],
                     },
                 }
             },
@@ -732,6 +769,7 @@ def call_anthropic_messages(
 ) -> dict[str, Any]:
     api_key = os.environ["ANTHROPIC_API_KEY"].strip()
     model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
+    cache_control = {"type": "ephemeral", "ttl": anthropic_cache_ttl()}
     response = requests.post(
         f"{anthropic_base_url()}/messages",
         headers={
@@ -742,8 +780,14 @@ def call_anthropic_messages(
         json={
             "model": model,
             "max_tokens": anthropic_max_output_tokens(),
-            "cache_control": {"type": "ephemeral", "ttl": anthropic_cache_ttl()},
-            "system": system_prompt,
+            "cache_control": cache_control,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": cache_control,
+                }
+            ],
             "messages": messages,
         },
         timeout=anthropic_timeout_seconds(),
@@ -767,35 +811,6 @@ def extract_response_text(payload: dict[str, Any]) -> str:
         if chunks:
             return "\n".join(chunks)
     raise ValueError("No text found in Anthropic response payload")
-
-
-def conversation_messages(conversation: dict[str, Any] | None) -> list[dict[str, Any]]:
-    raw_messages = (conversation or {}).get("messages")
-    if not isinstance(raw_messages, list):
-        return []
-    messages: list[dict[str, Any]] = []
-    for item in raw_messages:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role") or "").strip()
-        content = str(item.get("content") or "").strip()
-        if role not in {"user", "assistant"} or not content:
-            continue
-        messages.append({"role": role, "content": [{"type": "text", "text": content}]})
-    return messages
-
-
-def persistable_conversation_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    persisted: list[dict[str, str]] = []
-    for item in messages:
-        role = str(item.get("role") or "").strip()
-        content_blocks = item.get("content")
-        if role not in {"user", "assistant"} or not isinstance(content_blocks, list):
-            continue
-        texts = [str(block.get("text")).strip() for block in content_blocks if isinstance(block, dict) and block.get("type") == "text" and str(block.get("text")).strip()]
-        if texts:
-            persisted.append({"role": role, "content": "\n".join(texts)})
-    return persisted
 
 
 def parse_model_decision(payload: dict[str, Any]) -> dict[str, Any]:
@@ -823,10 +838,12 @@ def normalize_decision(decision: dict[str, Any], state: dict[str, Any]) -> dict[
     if action == "move":
         if "move" not in possible_actions or not isinstance(uci, str):
             return None
-        normalized_uci = uci.strip().lower()
-        if normalized_uci not in allowed_moves:
+        normalized_uci = uci.strip()
+        allowed_by_lower = {str(move).strip().lower(): str(move).strip() for move in allowed_moves}
+        allowed_move = allowed_by_lower.get(normalized_uci.lower())
+        if allowed_move is None:
             return None
-        return {"action": "move", "uci": normalized_uci}
+        return {"action": "move", "uci": allowed_move}
 
     if action == "ask_any":
         if "ask_any" not in possible_actions:
@@ -883,34 +900,27 @@ def choose_ranked_actions(
     feedback: list[str] | None = None,
     exclude_actions: list[dict[str, Any]] | None = None,
     recent_updates: list[str] | None = None,
-) -> tuple[list[dict[str, Any]], str, list[dict[str, str]] | None]:
+) -> tuple[list[dict[str, Any]], str, str | None]:
     if not anthropic_enabled():
         return fallback_ranked_actions(state), "fallback_no_anthropic_key", None
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
-        prior_messages = conversation_messages(conversation)
-        user_prompt = (
-            build_followup_user_prompt(
-                state,
-                feedback=feedback,
-                exclude_actions=exclude_actions,
-                recent_updates=recent_updates,
-            )
-            if prior_messages
-            else build_initial_user_prompt(state)
+        _ = conversation, recent_updates
+        user_prompt = build_turn_snapshot_user_prompt(
+            state,
+            feedback=feedback,
+            exclude_actions=exclude_actions,
         )
-        messages = prior_messages + [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}]
+        messages = [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}]
         raw_response = call_anthropic_messages(system_prompt=system_prompt, messages=messages)
         decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
-        assistant_text = extract_response_text(raw_response)
         usage = raw_response.get("usage") if isinstance(raw_response.get("usage"), dict) else {}
         cache_read_tokens = usage.get("cache_read_input_tokens", 0)
         cache_write_tokens = usage.get("cache_creation_input_tokens", 0)
         logger.debug("%s: model usage cache_read=%s cache_write=%s", game_id, cache_read_tokens, cache_write_tokens)
         if decisions:
-            next_messages = messages + [{"role": "assistant", "content": [{"type": "text", "text": assistant_text}]}]
-            return decisions, "model", persistable_conversation_messages(next_messages)
+            return decisions, "model", None
     except requests.RequestException as exc:
         reason = describe_http_error(exc)
         logger.warning("model selection failed: %s", reason)
@@ -953,7 +963,7 @@ def maybe_play_game(game_id: str) -> bool:
             previous_recent_referee = []
         recent_updates = new_recent_items(previous_recent_referee, recent_referee)
 
-        decisions, source, conversation_messages_for_save = choose_ranked_actions(
+        decisions, source, _response_id = choose_ranked_actions(
             state,
             game_id=game_id,
             conversation=conversation,
@@ -962,7 +972,6 @@ def maybe_play_game(game_id: str) -> bool:
             recent_updates=recent_updates,
         )
         conversation = {
-            "messages": conversation_messages_for_save or conversation.get("messages", []),
             "turn_signature": current_turn_signature,
             "scoresheet_digest": scoresheet_digest(scoresheet),
             "recent_referee_items": recent_referee,
@@ -989,7 +998,6 @@ def maybe_play_game(game_id: str) -> bool:
                     if recent_updates_after:
                         feedback.append("New referee announcements: " + " || ".join(recent_updates_after))
                     conversation = {
-                        "messages": conversation.get("messages", []),
                         "turn_signature": turn_signature(state_after),
                         "scoresheet_digest": scoresheet_digest(scoresheet_after),
                         "recent_referee_items": recent_after,
@@ -1025,7 +1033,6 @@ def maybe_play_game(game_id: str) -> bool:
                 )
             )
             conversation = {
-                "messages": conversation.get("messages", []),
                 "turn_signature": turn_signature(state_after),
                 "scoresheet_digest": scoresheet_digest(scoresheet_after),
                 "recent_referee_items": recent_after,
@@ -1054,7 +1061,6 @@ def maybe_play_game(game_id: str) -> bool:
                 )
             )
             conversation = {
-                "messages": conversation.get("messages", []),
                 "turn_signature": turn_signature(refreshed_state),
                 "scoresheet_digest": scoresheet_digest(refreshed_scoresheet),
                 "recent_referee_items": refreshed_recent,
@@ -1105,6 +1111,7 @@ def main() -> None:
     if not anthropic_enabled():
         logger.warning("ANTHROPIC_API_KEY is missing; bot-vs-bot joins will be skipped and turns will use fallback mode.")
 
+    sync_bot_profile()
     run_loop(args.poll_seconds)
 
 
