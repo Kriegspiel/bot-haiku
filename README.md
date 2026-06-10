@@ -8,7 +8,7 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - polls assigned games from the live API
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
-- builds a prompt from the current rule variant, private FEN, legal actions, and private scoresheet
+- builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - asks an Anthropic Haiku model for the top ranked next actions in strict JSON
 - validates the model output against the server-provided legal actions
 - checks Anthropic availability with a tiny cached preflight call before joining a new bot-vs-bot game
@@ -26,21 +26,18 @@ python bot.py --register
 python bot.py
 ```
 
-The bot reads the live rules text from the sibling `ks-content` repository:
+The bot uses dedicated prompt summaries in `ruleset_summaries/*.md`, derived from the canonical `ks-content/rules` docs.
 
-- `ks-content/rules/berkeley.md`
-- `ks-content/rules/README.md`
-
-Set `KRIEGSPIEL_CONTENT_RULES_DIR` to override that rules directory.
+Keep those summaries short and update them when a ruleset behavior that matters to model play changes.
 
 By default the registration email is `bot-haiku@kriegspiel.org`.
 
 By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
-- `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any`
+- `KRIEGSPIEL_AUTO_CREATE_RULE_VARIANT=berkeley|berkeley_any|cincinnati|wild16|rand|english|crazykrieg`
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
-- `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any`
+- `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any,cincinnati,wild16,rand,english,crazykrieg`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
 
 Bot-vs-bot play is also enabled by default:
@@ -54,17 +51,16 @@ Bot-vs-bot play is also enabled by default:
 
 Anthropic prompting defaults:
 
-- system prompt carries the rules and overall Kriegspiel scene
-- the first user prompt carries private scoresheet history, recent referee items, and legal actions
-- later user prompts carry only incremental updates: new referee items, rejected candidates, and refreshed legal options
-- the bot keeps per-game conversation history and reuses it on the Anthropic Messages API
-- automatic prompt caching is enabled with a 1-hour TTL to maximize cache reuse across retries and later turns
+- system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
+- user prompt is stateless and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
+- Anthropic prompt caching is enabled with a 1-hour TTL by default, with an explicit cache marker on the stable system prompt
 - the bot asks for the top 10 ranked candidate actions by default
 - if a batch fails, it asks the model for the next batch of candidates
 - defaults can be tuned with:
   - `ANTHROPIC_MODEL=claude-haiku-4-5-20251001`
   - `ANTHROPIC_MODEL_BATCH_SIZE=10`
   - `ANTHROPIC_MAX_BATCHES_PER_TURN=5`
+  - `ANTHROPIC_MAX_PROMPT_TURNS=10` (values below 10 are clamped to 10)
   - `ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS=60`
   - `ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS=15`
 
