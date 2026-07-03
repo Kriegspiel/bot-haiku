@@ -610,12 +610,13 @@ def build_system_prompt(rule_variant: str) -> str:
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
-        "Return exactly target_count unique JSON candidate actions ordered strictly from best to worst priority.\n"
+        "Return only a JSON object shaped as {\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}.\n"
+        "Return exactly target_count unique candidate actions ordered strictly from best to worst priority.\n"
         "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
         "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
         "If action=move, uci must exactly match one allowed_moves item.\n"
         "If action=ask_any, uci must be null.\n"
-        "Do not explain the rules. Do not include prose outside the JSON schema.\n\n"
+        "Do not explain the rules. Do not include prose outside the JSON object.\n\n"
         f"{rules_summary}\n"
     )
 
@@ -762,6 +763,11 @@ def anthropic_enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
 
+def anthropic_use_tools() -> bool:
+    raw = os.environ.get("ANTHROPIC_USE_TOOLS", "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def cache_anthropic_preflight(ready: bool, *, reason: str, ttl_seconds: float) -> tuple[bool, str]:
     _ANTHROPIC_PREFLIGHT_CACHE["ready"] = ready
     _ANTHROPIC_PREFLIGHT_CACHE["reason"] = reason
@@ -837,6 +843,22 @@ def call_anthropic_messages(
     api_key = os.environ["ANTHROPIC_API_KEY"].strip()
     model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
     cache_control = {"type": "ephemeral", "ttl": anthropic_cache_ttl()}
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": anthropic_max_output_tokens(),
+        "cache_control": cache_control,
+        "system": [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": cache_control,
+            }
+        ],
+        "messages": messages,
+    }
+    if anthropic_use_tools():
+        payload["tools"] = [action_tool()]
+        payload["tool_choice"] = {"type": "tool", "name": ACTION_SCHEMA_NAME}
     response = requests.post(
         f"{anthropic_base_url()}/messages",
         headers={
@@ -844,21 +866,7 @@ def call_anthropic_messages(
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
-        json={
-            "model": model,
-            "max_tokens": anthropic_max_output_tokens(),
-            "cache_control": cache_control,
-            "system": [
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": cache_control,
-                }
-            ],
-            "tools": [action_tool()],
-            "tool_choice": {"type": "tool", "name": ACTION_SCHEMA_NAME},
-            "messages": messages,
-        },
+        json=payload,
         timeout=anthropic_timeout_seconds(),
     )
     response.raise_for_status()

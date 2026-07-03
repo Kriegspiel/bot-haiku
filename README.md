@@ -54,6 +54,7 @@ Anthropic prompting defaults:
 - system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
 - user prompt is stateless and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
 - Anthropic prompt caching is enabled with a 1-hour TTL by default, with an explicit cache marker on the stable system prompt
+- Anthropic tool use is disabled by default to keep each request smaller; set `ANTHROPIC_USE_TOOLS=true` to force tool-calling output
 - the bot asks for the top 10 ranked candidate actions by default
 - if a batch fails, it asks the model for the next batch of candidates
 - defaults can be tuned with:
