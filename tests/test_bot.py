@@ -364,6 +364,11 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("reason", candidate_schema["properties"])
         self.assertEqual(candidate_schema["required"], ["action", "uci"])
 
+    def test_action_schema_omits_anthropic_unsupported_array_max_items(self) -> None:
+        candidates_schema = bot.action_schema()["schema"]["properties"]["candidates"]
+        self.assertEqual(candidates_schema["minItems"], 1)
+        self.assertNotIn("maxItems", candidates_schema)
+
     def test_anthropic_usage_cost_usd_accounts_for_cache_ttl(self) -> None:
         usage = {
             "input_tokens": 1000,
