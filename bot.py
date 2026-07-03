@@ -41,6 +41,12 @@ DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS = 10
 DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
+USD_PER_MILLION_TOKENS = 1_000_000
+ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS = 1.00
+ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS = 5.00
+ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS = 0.10
+ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS = 1.25
+ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS = 2.00
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
 LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any")
@@ -121,6 +127,60 @@ def anthropic_max_output_tokens() -> int:
         return max(128, int(raw))
     except ValueError:
         return DEFAULT_ANTHROPIC_OUTPUT_TOKENS
+
+
+def usage_token_count(usage: dict[str, Any], key: str) -> int:
+    value = usage.get(key)
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def anthropic_usage_cost_usd(usage: dict[str, Any], *, cache_ttl: str) -> float:
+    cache_write_rate = (
+        ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS
+        if cache_ttl == "5m"
+        else ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS
+    )
+    input_tokens = usage_token_count(usage, "input_tokens")
+    output_tokens = usage_token_count(usage, "output_tokens")
+    cache_read_tokens = usage_token_count(usage, "cache_read_input_tokens")
+    cache_write_tokens = usage_token_count(usage, "cache_creation_input_tokens")
+    return (
+        input_tokens * ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS
+        + output_tokens * ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS
+        + cache_read_tokens * ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS
+        + cache_write_tokens * cache_write_rate
+    ) / USD_PER_MILLION_TOKENS
+
+
+def log_anthropic_usage(*, game_id: str, model: str, payload: dict[str, Any]) -> None:
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cache_ttl = anthropic_cache_ttl()
+    response_id = str(payload.get("id") or "")
+    input_tokens = usage_token_count(usage, "input_tokens")
+    output_tokens = usage_token_count(usage, "output_tokens")
+    cache_read_tokens = usage_token_count(usage, "cache_read_input_tokens")
+    cache_write_tokens = usage_token_count(usage, "cache_creation_input_tokens")
+    logger.info(
+        (
+            "%s: model usage provider=anthropic model=%s response_id=%s "
+            "input_tokens=%s output_tokens=%s cache_read_input_tokens=%s "
+            "cache_creation_input_tokens=%s cache_ttl=%s cost_usd=%.6f"
+        ),
+        game_id,
+        model,
+        response_id,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        cache_ttl,
+        anthropic_usage_cost_usd(usage, cache_ttl=cache_ttl),
+    )
 
 
 def auth_headers() -> dict[str, str]:
@@ -957,11 +1017,12 @@ def choose_ranked_actions(
         )
         messages = [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}]
         raw_response = call_anthropic_messages(system_prompt=system_prompt, messages=messages)
+        log_anthropic_usage(
+            game_id=game_id,
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip(),
+            payload=raw_response,
+        )
         decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
-        usage = raw_response.get("usage") if isinstance(raw_response.get("usage"), dict) else {}
-        cache_read_tokens = usage.get("cache_read_input_tokens", 0)
-        cache_write_tokens = usage.get("cache_creation_input_tokens", 0)
-        logger.debug("%s: model usage cache_read=%s cache_write=%s", game_id, cache_read_tokens, cache_write_tokens)
         if decisions:
             return decisions, "model", None
     except requests.RequestException as exc:

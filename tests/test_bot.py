@@ -364,6 +364,17 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("reason", candidate_schema["properties"])
         self.assertEqual(candidate_schema["required"], ["action", "uci"])
 
+    def test_anthropic_usage_cost_usd_accounts_for_cache_ttl(self) -> None:
+        usage = {
+            "input_tokens": 1000,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 500,
+            "cache_creation_input_tokens": 200,
+        }
+
+        self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.00155)
+        self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.0014)
+
     def test_choose_ranked_actions_is_stateless(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
@@ -398,6 +409,45 @@ class BotTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertNotIn("old bulky prompt", json.dumps(messages))
         self.assertIn("\"private_board_fen\":\"fen\"", messages[0]["content"][0]["text"])
+
+    def test_choose_ranked_actions_logs_usage_before_parse_failure(self) -> None:
+        state = {
+            "rule_variant": "berkeley_any",
+            "your_color": "white",
+            "turn": "white",
+            "move_number": 3,
+            "your_fen": "fen",
+            "possible_actions": ["move"],
+            "allowed_moves": ["e2e4"],
+            "scoresheet": {"viewer_color": "white", "turns": []},
+        }
+        raw_response = {
+            "id": "msg_1",
+            "content": [{"type": "text", "text": "not json"}],
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 200,
+            },
+        }
+
+        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_CACHE_TTL": "1h"}, clear=False):
+            with mock.patch.object(bot, "call_anthropic_messages", return_value=raw_response):
+                with self.assertLogs(bot.logger, level="INFO") as logs:
+                    decisions, source, response_id = bot.choose_ranked_actions(state, game_id="gid1")
+
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}])
+        self.assertEqual(source, "fallback")
+        self.assertIsNone(response_id)
+        log_output = "\n".join(logs.output)
+        self.assertIn("provider=anthropic", log_output)
+        self.assertIn("response_id=msg_1", log_output)
+        self.assertIn("input_tokens=1000", log_output)
+        self.assertIn("output_tokens=20", log_output)
+        self.assertIn("cache_read_input_tokens=500", log_output)
+        self.assertIn("cache_creation_input_tokens=200", log_output)
+        self.assertIn("cost_usd=0.001550", log_output)
 
     def test_choose_bot_game_to_join_returns_candidate(self) -> None:
         games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
