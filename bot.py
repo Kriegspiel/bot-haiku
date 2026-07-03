@@ -732,7 +732,6 @@ def action_schema() -> dict[str, Any]:
                 "candidates": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 20,
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
