@@ -611,14 +611,23 @@ def build_system_prompt(rule_variant: str) -> str:
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
         "Return only a JSON object shaped as {\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}.\n"
-        "Return exactly target_count unique candidate actions ordered strictly from best to worst priority.\n"
+        "Return minified JSON with no spaces, newlines, or prose.\n"
+        "Turn JSON keys: c=your color,t=side to move,mn=move number,fen=private board FEN,"
+        "mat=material,hist=recent scorecard,act=possible actions,moves=legal UCI moves,"
+        "n=target candidate count,res=reserves,rej=rejected actions,fb=retry feedback.\n"
+        "Colors inside mat/hist/res use w=white and b=black; hist items use n=turn,w=white entries,b=black entries.\n"
+        "Return exactly n unique candidate actions ordered strictly from best to worst priority.\n"
         "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
         "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
-        "If action=move, uci must exactly match one allowed_moves item.\n"
-        "If action=ask_any, uci must be null.\n"
+        "If action=move, uci must exactly match one moves item.\n"
+        "If action=ask_any, ask_any must appear in act and uci must be null.\n"
         "Do not explain the rules. Do not include prose outside the JSON object.\n\n"
         f"{rules_summary}\n"
     )
+
+
+def _compact_color_key(color: str) -> str:
+    return "w" if color == "white" else "b"
 
 
 def _prompt_material_summary(state: dict[str, Any]) -> dict[str, dict[str, int]]:
@@ -631,12 +640,12 @@ def _prompt_material_summary(state: dict[str, Any]) -> dict[str, dict[str, int]]
         item: dict[str, int] = {}
         pieces_remaining = side.get("pieces_remaining")
         if isinstance(pieces_remaining, int):
-            item["pieces_remaining"] = pieces_remaining
+            item["pieces"] = pieces_remaining
         pawns_captured = side.get("pawns_captured")
         if isinstance(pawns_captured, int):
             item["pawns_captured"] = pawns_captured
         if item:
-            payload[color] = item
+            payload[_compact_color_key(color)] = item
     return payload
 
 
@@ -648,11 +657,23 @@ def _prompt_reserve_summary(state: dict[str, Any], *, rule_variant: str) -> dict
     for color in ("white", "black"):
         side = reserves.get(color) if isinstance(reserves.get(color), dict) else {}
         if side:
-            payload[color] = {
+            payload[_compact_color_key(color)] = {
                 piece: int(side.get(piece, 0) or 0)
                 for piece in ("pawns", "knights", "bishops", "rooks", "queens")
             }
     return payload
+
+
+def compact_recent_scoresheet_turns(scoresheet: dict[str, Any], *, max_turns: int) -> list[dict[str, Any]]:
+    compact: list[dict[str, Any]] = []
+    for turn in recent_scoresheet_turns(scoresheet, max_turns=max_turns):
+        item: dict[str, Any] = {"n": turn.get("turn")}
+        for color in ("white", "black"):
+            key = _compact_color_key(color)
+            entries = turn.get(color) if isinstance(turn.get(color), list) else []
+            item[key] = entries
+        compact.append(item)
+    return compact
 
 
 def build_turn_snapshot_payload(
@@ -668,25 +689,25 @@ def build_turn_snapshot_payload(
     available_action_count = len(allowed_moves) + (1 if "ask_any" in possible_actions else 0)
     target_count = min(model_batch_size(), available_action_count)
     payload: dict[str, Any] = {
-        "your_color": state.get("your_color"),
-        "turn": state.get("turn"),
-        "move_number": state.get("move_number"),
-        "private_board_fen": state.get("your_fen"),
-        "material": _prompt_material_summary(state),
-        "recent_turns": recent_scoresheet_turns(scoresheet, max_turns=anthropic_max_prompt_turns()),
-        "possible_actions": possible_actions,
-        "allowed_moves": allowed_moves,
-        "target_count": target_count,
+        "c": state.get("your_color"),
+        "t": state.get("turn"),
+        "mn": state.get("move_number"),
+        "fen": state.get("your_fen"),
+        "mat": _prompt_material_summary(state),
+        "hist": compact_recent_scoresheet_turns(scoresheet, max_turns=anthropic_max_prompt_turns()),
+        "act": possible_actions,
+        "moves": allowed_moves,
+        "n": target_count,
     }
     reserves = _prompt_reserve_summary(state, rule_variant=rule_variant)
     if reserves:
-        payload["reserves"] = reserves
+        payload["res"] = reserves
     rejected = [format_action(item) for item in (exclude_actions or [])[-20:]]
     if rejected:
-        payload["rejected_this_turn"] = rejected
+        payload["rej"] = rejected
     retry_feedback = [item for item in (feedback or [])[-6:] if item]
     if retry_feedback:
-        payload["retry_feedback"] = retry_feedback
+        payload["fb"] = retry_feedback
     return payload
 
 
@@ -1136,8 +1157,8 @@ def maybe_play_game(game_id: str) -> bool:
                 "New possible actions: "
                 + json.dumps(
                     {
-                        "possible_actions": state_after.get("possible_actions"),
-                        "allowed_moves": state_after.get("allowed_moves"),
+                        "act": state_after.get("possible_actions"),
+                        "moves": state_after.get("allowed_moves"),
                     },
                     separators=(",", ":"),
                     ensure_ascii=True,
@@ -1164,8 +1185,8 @@ def maybe_play_game(game_id: str) -> bool:
                 "Current legal options now: "
                 + json.dumps(
                     {
-                        "possible_actions": refreshed_state.get("possible_actions"),
-                        "allowed_moves": refreshed_state.get("allowed_moves"),
+                        "act": refreshed_state.get("possible_actions"),
+                        "moves": refreshed_state.get("allowed_moves"),
                     },
                     separators=(",", ":"),
                     ensure_ascii=True,

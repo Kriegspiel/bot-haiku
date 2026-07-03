@@ -107,14 +107,17 @@ class BotTests(unittest.TestCase):
         )
         self.assertIn("Berkeley + Any", system_prompt)
         self.assertNotIn("I. Introduction", system_prompt)
-        self.assertIn("\"private_board_fen\":\"fen\"", user_prompt)
+        self.assertIn("Return minified JSON", system_prompt)
+        self.assertIn("Turn JSON keys: c=your color", system_prompt)
+        self.assertIn("\"fen\":\"fen\"", user_prompt)
+        self.assertNotIn("private_board_fen", user_prompt)
         self.assertNotIn("rule_variant", user_prompt)
         self.assertNotIn("pawns_captured", user_prompt)
-        self.assertIn("\"material\":{\"black\":{\"pieces_remaining\":15},\"white\":{\"pieces_remaining\":16}}", user_prompt)
-        self.assertIn("\"recent_turns\":[{\"black\":[],\"turn\":1,\"white\":[\"[e2e4] Move complete\"]}]", user_prompt)
+        self.assertIn("\"mat\":{\"b\":{\"pieces\":15},\"w\":{\"pieces\":16}}", user_prompt)
+        self.assertIn("\"hist\":[{\"b\":[],\"n\":1,\"w\":[\"[e2e4] Move complete\"]}]", user_prompt)
         self.assertIn("Rejected move e2e4: Illegal move", followup_prompt)
         self.assertNotIn("Turn 3 black: Illegal move", followup_prompt)
-        self.assertIn("\"rejected_this_turn\":[\"e2e4\"]", followup_prompt)
+        self.assertIn("\"rej\":[\"e2e4\"]", followup_prompt)
 
     def test_ruleset_summary_files_cover_supported_variants(self) -> None:
         summary_files = {path.stem for path in bot.RULESET_SUMMARY_DIR.glob("*.md")}
@@ -165,9 +168,9 @@ class BotTests(unittest.TestCase):
         payload = bot.build_turn_snapshot_payload(state)
         system_prompt = bot.build_system_prompt("berkeley_any")
 
-        self.assertEqual(payload["target_count"], 10)
-        self.assertIn("Return exactly target_count", system_prompt)
-        self.assertNotIn("Return up to target_count", system_prompt)
+        self.assertEqual(payload["n"], 10)
+        self.assertIn("Return exactly n", system_prompt)
+        self.assertNotIn("Return up to n", system_prompt)
 
     def test_anthropic_max_prompt_turns_has_ten_turn_floor(self) -> None:
         with mock.patch.dict("os.environ", {"ANTHROPIC_MAX_PROMPT_TURNS": "5"}):
@@ -200,9 +203,9 @@ class BotTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"ANTHROPIC_MAX_PROMPT_TURNS": "5"}):
             payload = bot.build_turn_snapshot_payload(state)
 
-        self.assertEqual(len(payload["recent_turns"]), 10)
-        self.assertEqual(payload["recent_turns"][0]["turn"], 3)
-        self.assertEqual(payload["recent_turns"][-1]["turn"], 12)
+        self.assertEqual(len(payload["hist"]), 10)
+        self.assertEqual(payload["hist"][0]["n"], 3)
+        self.assertEqual(payload["hist"][-1]["n"], 12)
 
     def test_turn_snapshot_payload_includes_rule_specific_public_context(self) -> None:
         cincinnati_payload = bot.build_turn_snapshot_payload(
@@ -226,13 +229,13 @@ class BotTests(unittest.TestCase):
             }
         )
         self.assertEqual(
-            cincinnati_payload["material"],
+            cincinnati_payload["mat"],
             {
-                "white": {"pieces_remaining": 16, "pawns_captured": 0},
-                "black": {"pieces_remaining": 15, "pawns_captured": 1},
+                "w": {"pieces": 16, "pawns_captured": 0},
+                "b": {"pieces": 15, "pawns_captured": 1},
             },
         )
-        self.assertNotIn("reserves", cincinnati_payload)
+        self.assertNotIn("res", cincinnati_payload)
 
         crazy_payload = bot.build_turn_snapshot_payload(
             {
@@ -255,11 +258,11 @@ class BotTests(unittest.TestCase):
             }
         )
         self.assertEqual(
-            crazy_payload["material"],
-            {"white": {"pieces_remaining": 17}, "black": {"pieces_remaining": 15}},
+            crazy_payload["mat"],
+            {"w": {"pieces": 17}, "b": {"pieces": 15}},
         )
-        self.assertEqual(crazy_payload["reserves"]["white"]["knights"], 1)
-        self.assertEqual(crazy_payload["reserves"]["black"]["pawns"], 1)
+        self.assertEqual(crazy_payload["res"]["w"]["knights"], 1)
+        self.assertEqual(crazy_payload["res"]["b"]["pawns"], 1)
 
     def test_new_recent_items_returns_only_suffix_delta(self) -> None:
         previous = ["Turn 1 white: Move complete", "Turn 1 black: Illegal move"]
@@ -413,7 +416,8 @@ class BotTests(unittest.TestCase):
         messages = call_anthropic_messages.call_args.kwargs["messages"]
         self.assertEqual(len(messages), 1)
         self.assertNotIn("old bulky prompt", json.dumps(messages))
-        self.assertIn("\"private_board_fen\":\"fen\"", messages[0]["content"][0]["text"])
+        self.assertIn("\"fen\":\"fen\"", messages[0]["content"][0]["text"])
+        self.assertNotIn("private_board_fen", messages[0]["content"][0]["text"])
 
     def test_choose_ranked_actions_logs_usage_before_parse_failure(self) -> None:
         state = {
