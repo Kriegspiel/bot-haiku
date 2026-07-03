@@ -534,7 +534,7 @@ class BotTests(unittest.TestCase):
                 self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
         self.assertEqual(post.call_count, 1)
 
-    def test_call_anthropic_messages_caches_system_prompt(self) -> None:
+    def test_call_anthropic_messages_uses_plain_json_by_default(self) -> None:
         response = mock.Mock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"content": []}
@@ -548,6 +548,22 @@ class BotTests(unittest.TestCase):
         self.assertEqual(payload["cache_control"], {"type": "ephemeral", "ttl": "1h"})
         self.assertEqual(payload["system"][0]["text"], "short system")
         self.assertEqual(payload["system"][0]["cache_control"], {"type": "ephemeral", "ttl": "1h"})
+        self.assertNotIn("tool_choice", payload)
+        self.assertNotIn("tools", payload)
+        self.assertEqual(payload["messages"], messages)
+
+    def test_call_anthropic_messages_can_opt_into_tools(self) -> None:
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"content": []}
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Current turn JSON:\n{}"}]}]
+
+        env = {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_CACHE_TTL": "1h", "ANTHROPIC_USE_TOOLS": "true"}
+        with mock.patch.dict("os.environ", env, clear=False):
+            with mock.patch.object(bot.requests, "post", return_value=response) as post:
+                bot.call_anthropic_messages(system_prompt="short system", messages=messages)
+
+        payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["tool_choice"], {"type": "tool", "name": bot.ACTION_SCHEMA_NAME})
         self.assertEqual(payload["tools"][0]["name"], bot.ACTION_SCHEMA_NAME)
         self.assertEqual(payload["tools"][0]["input_schema"], bot.action_schema()["schema"])
