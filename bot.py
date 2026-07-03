@@ -690,6 +690,15 @@ def action_schema() -> dict[str, Any]:
     }
 
 
+def action_tool() -> dict[str, Any]:
+    return {
+        "name": ACTION_SCHEMA_NAME,
+        "description": "Return ranked Kriegspiel candidate actions for the current turn.",
+        "input_schema": action_schema()["schema"],
+        "strict": True,
+    }
+
+
 def anthropic_enabled() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY", "").strip())
 
@@ -787,12 +796,29 @@ def call_anthropic_messages(
                     "cache_control": cache_control,
                 }
             ],
+            "tools": [action_tool()],
+            "tool_choice": {"type": "tool", "name": ACTION_SCHEMA_NAME},
             "messages": messages,
         },
         timeout=anthropic_timeout_seconds(),
     )
     response.raise_for_status()
     return response.json()
+
+
+def extract_tool_input(payload: dict[str, Any]) -> dict[str, Any] | None:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "tool_use" or item.get("name") != ACTION_SCHEMA_NAME:
+            continue
+        tool_input = item.get("input")
+        if isinstance(tool_input, dict):
+            return tool_input
+    return None
 
 
 def extract_response_text(payload: dict[str, Any]) -> str:
@@ -812,15 +838,33 @@ def extract_response_text(payload: dict[str, Any]) -> str:
     raise ValueError("No text found in Anthropic response payload")
 
 
+def decode_first_json_object(text: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    first_error: json.JSONDecodeError | None = None
+    for match in re.finditer(r"\{", text):
+        try:
+            value, _ = decoder.raw_decode(text[match.start() :])
+        except json.JSONDecodeError as exc:
+            if first_error is None:
+                first_error = exc
+            continue
+        if isinstance(value, dict):
+            return value
+    if first_error is not None:
+        raise first_error
+    raise ValueError("No JSON object found in model response")
+
+
 def parse_model_decision(payload: dict[str, Any]) -> dict[str, Any]:
+    tool_input = extract_tool_input(payload)
+    if tool_input is not None:
+        return tool_input
+
     text = extract_response_text(payload)
     try:
         decision = json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise
-        decision = json.loads(match.group(0))
+        decision = decode_first_json_object(text)
 
     if not isinstance(decision, dict):
         raise ValueError("Model response must decode to an object")
