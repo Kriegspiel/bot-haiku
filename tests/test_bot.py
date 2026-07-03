@@ -49,6 +49,23 @@ class BotTests(unittest.TestCase):
             "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}",
         )
 
+    def test_parse_model_decision_reads_anthropic_tool_use(self) -> None:
+        payload = {
+            "content": [
+                {"type": "text", "text": "Calling the action tool."},
+                {
+                    "type": "tool_use",
+                    "name": bot.ACTION_SCHEMA_NAME,
+                    "input": {"candidates": [{"action": "move", "uci": "e2e4"}]},
+                },
+            ]
+        }
+        self.assertEqual(bot.parse_model_decision(payload), {"candidates": [{"action": "move", "uci": "e2e4"}]})
+
+    def test_parse_model_decision_accepts_trailing_text_after_json(self) -> None:
+        payload = {"content": [{"type": "text", "text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}\nDone."}]}
+        self.assertEqual(bot.parse_model_decision(payload), {"candidates": [{"action": "move", "uci": "e2e4"}]})
+
     def test_fallback_prefers_center_moves(self) -> None:
         state = {"possible_actions": ["move"], "allowed_moves": ["a2a3", "e2e4", "h2h3"]}
         decision = bot.fallback_decision(state)
@@ -476,6 +493,10 @@ class BotTests(unittest.TestCase):
         self.assertEqual(payload["cache_control"], {"type": "ephemeral", "ttl": "1h"})
         self.assertEqual(payload["system"][0]["text"], "short system")
         self.assertEqual(payload["system"][0]["cache_control"], {"type": "ephemeral", "ttl": "1h"})
+        self.assertEqual(payload["tool_choice"], {"type": "tool", "name": bot.ACTION_SCHEMA_NAME})
+        self.assertEqual(payload["tools"][0]["name"], bot.ACTION_SCHEMA_NAME)
+        self.assertEqual(payload["tools"][0]["input_schema"], bot.action_schema()["schema"])
+        self.assertTrue(payload["tools"][0]["strict"])
         self.assertEqual(payload["messages"], messages)
 
     def test_report_model_availability_posts_status_and_throttles_repeats(self) -> None:
