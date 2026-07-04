@@ -38,6 +38,8 @@ BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS = 10
+DEFAULT_ANTHROPIC_CACHE_TTL = "5m"
+MIN_CACHEABLE_SYSTEM_PROMPT_WORDS = 4200
 DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
@@ -50,6 +52,48 @@ ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS = 2.00
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
 LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any")
+CACHE_REFERENCE_CONTEXTS = (
+    "Opening development",
+    "Early uncertainty",
+    "Material race",
+    "King-safety pressure",
+    "Pawn-capture tension",
+    "Ask-any turn",
+    "Retry after rejection",
+    "Endgame conversion",
+)
+CACHE_REFERENCE_PRINCIPLES = (
+    "Treat the current legal move list as the complete action universe; never infer that an attractive move is legal when it is absent.",
+    "Prefer moves that improve piece activity, king safety, and future legal flexibility without depending on unknown opponent piece locations.",
+    "When several moves look similar, choose the one that keeps more ordinary chess plans available on the following turn.",
+    "Use the private FEN as your exact board; hidden enemy pieces may exist only where the server has not disproved them.",
+    "Do not chase a guessed capture if a quiet developing move gives durable improvement and avoids weakening your king.",
+    "Respect every public scorecard clue, especially illegal tries, capture announcements, check announcements, pawn-capture reports, and promotion messages.",
+    "If a recent legal move produced no capture message, update your expectations about likely occupied target squares before ranking candidates.",
+    "If a recent attempted move was rejected, avoid proposing the same rejected action again unless retry feedback explicitly changes the situation.",
+    "Do not overfit to one hidden-board hypothesis; rank candidates that remain reasonable across multiple plausible opponent arrangements.",
+    "When ahead or tactically comfortable, reduce volatility by avoiding speculative king exposure and unnecessary pawn weaknesses.",
+    "When behind or constrained, prefer forcing development, checks when legal, and moves that create multiple future threats.",
+    "Prioritize king safety before material guesses when your own king has limited escape squares or the scorecard suggests pressure.",
+    "Prefer centralization and coordination when no concrete capture, check, pawn break, or defensive need dominates the position.",
+    "Give rooks files and ranks where they have legal mobility; avoid burying major pieces behind pawns without compensation.",
+    "Use knights for resilient outposts and blockade work because their value often survives hidden-board uncertainty.",
+    "Use bishops and queens on lines where they gain information through legal movement while keeping the king defended.",
+    "Pawn moves should create lasting structure, legal mobility, promotion chances, or defensive cover; avoid weakening moves made only to pass.",
+    "A capture candidate is strongest when the private board, legal move list, and recent public messages all support the same target story.",
+    "If ask_any is available, use it only when the information is likely to change the best move or avoid a serious tactical mistake.",
+    "Do not use ask_any as a default tempo saver when a clearly strong legal move is already available.",
+    "On retry turns, return fresh candidates ordered by quality and exclude rejected actions from the front of the list.",
+    "In low-material endings, value king activity, passed pawns, opposition ideas, and moves that preserve known legal routes.",
+    "In promotion races, favor moves that advance connected or protected pawns while limiting the opponent king's counterplay.",
+    "For drop or reserve variants, treat reserves as real tactical resources only when the current rules summary says they apply.",
+    "For variants with different announcement semantics, follow the active rules summary and avoid importing assumptions from another variant.",
+    "Return exactly the requested number of unique candidates when that many legal actions exist; do not include prose or explanations.",
+    "Rank the first entry as the move you actually want played, because the runner submits candidates in order until one succeeds.",
+    "Prefer robust legal candidates over clever moves that require the opponent to have exactly one hidden configuration.",
+    "When the history is sparse, fall back to ordinary strong chess principles filtered through legality and hidden-information caution.",
+    "When the history is rich, let recent public evidence refine candidate ordering without overriding current legality.",
+)
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO), format="%(levelname)s %(message)s")
@@ -115,10 +159,10 @@ def model_availability_report_interval_seconds() -> float:
 
 
 def anthropic_cache_ttl() -> str:
-    raw = os.environ.get("ANTHROPIC_CACHE_TTL", "1h").strip().lower()
+    raw = os.environ.get("ANTHROPIC_CACHE_TTL", DEFAULT_ANTHROPIC_CACHE_TTL).strip().lower()
     if raw in {"5m", "1h"}:
         return raw
-    return "1h"
+    return DEFAULT_ANTHROPIC_CACHE_TTL
 
 
 def anthropic_max_output_tokens() -> int:
@@ -604,6 +648,19 @@ def load_ruleset_summary(rule_variant: str) -> str:
     return (RULESET_SUMMARY_DIR / f"{variant}.md").read_text(encoding="utf-8").strip()
 
 
+@lru_cache(maxsize=1)
+def build_static_strategy_reference() -> str:
+    lines = [
+        "Stable strategy checklist for hidden-information Kriegspiel play.",
+        "Use this reference only as general tie-breaking guidance. The active rules summary, current legal actions, retry feedback, and current turn JSON are authoritative.",
+    ]
+    for context in CACHE_REFERENCE_CONTEXTS:
+        lines.append(f"\n{context}:")
+        for index, principle in enumerate(CACHE_REFERENCE_PRINCIPLES, start=1):
+            lines.append(f"{index}. {principle}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(rule_variant: str) -> str:
     rules_summary = load_ruleset_summary(rule_variant)
     return (
@@ -622,7 +679,8 @@ def build_system_prompt(rule_variant: str) -> str:
         "Each move entry must exactly match one moves item.\n"
         "Use the string ask_any only when ask_any appears in act.\n"
         "Do not explain the rules. Do not include prose outside the JSON object.\n\n"
-        f"{rules_summary}\n"
+        f"{rules_summary}\n\n"
+        f"{build_static_strategy_reference()}\n"
     )
 
 
@@ -859,7 +917,6 @@ def call_anthropic_messages(
     payload: dict[str, Any] = {
         "model": model,
         "max_tokens": anthropic_max_output_tokens(),
-        "cache_control": cache_control,
         "system": [
             {
                 "type": "text",
