@@ -158,6 +158,14 @@ def model_availability_report_interval_seconds() -> float:
         return DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS
 
 
+def env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def anthropic_cache_ttl() -> str:
     raw = os.environ.get("ANTHROPIC_CACHE_TTL", DEFAULT_ANTHROPIC_CACHE_TTL).strip().lower()
     if raw in {"5m", "1h"}:
@@ -183,20 +191,58 @@ def usage_token_count(usage: dict[str, Any], key: str) -> int:
         return 0
 
 
+def anthropic_input_usd_per_million_tokens() -> float:
+    return max(0.0, env_float("ANTHROPIC_INPUT_USD_PER_MILLION_TOKENS", ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS))
+
+
+def anthropic_output_usd_per_million_tokens() -> float:
+    return max(0.0, env_float("ANTHROPIC_OUTPUT_USD_PER_MILLION_TOKENS", ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS))
+
+
+def anthropic_cache_read_input_usd_per_million_tokens() -> float:
+    return max(
+        0.0,
+        env_float(
+            "ANTHROPIC_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS",
+            ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS,
+        ),
+    )
+
+
+def anthropic_cache_write_5m_usd_per_million_tokens() -> float:
+    return max(
+        0.0,
+        env_float(
+            "ANTHROPIC_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS",
+            ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS,
+        ),
+    )
+
+
+def anthropic_cache_write_1h_usd_per_million_tokens() -> float:
+    return max(
+        0.0,
+        env_float(
+            "ANTHROPIC_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS",
+            ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS,
+        ),
+    )
+
+
 def anthropic_usage_cost_usd(usage: dict[str, Any], *, cache_ttl: str) -> float:
     cache_write_rate = (
-        ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS
+        anthropic_cache_write_5m_usd_per_million_tokens()
         if cache_ttl == "5m"
-        else ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS
+        else anthropic_cache_write_1h_usd_per_million_tokens()
     )
     input_tokens = usage_token_count(usage, "input_tokens")
     output_tokens = usage_token_count(usage, "output_tokens")
     cache_read_tokens = usage_token_count(usage, "cache_read_input_tokens")
     cache_write_tokens = usage_token_count(usage, "cache_creation_input_tokens")
     return (
-        input_tokens * ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS
-        + output_tokens * ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS
-        + cache_read_tokens * ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS
+        input_tokens * anthropic_input_usd_per_million_tokens()
+        + output_tokens * anthropic_output_usd_per_million_tokens()
+        + cache_read_tokens * anthropic_cache_read_input_usd_per_million_tokens()
         + cache_write_tokens * cache_write_rate
     ) / USD_PER_MILLION_TOKENS
 
