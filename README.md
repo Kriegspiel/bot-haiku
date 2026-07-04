@@ -9,6 +9,7 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
 - builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
+- adds a stable system-prompt strategy reference so Anthropic prompt caching is above Haiku's cacheable token threshold
 - asks an Anthropic Haiku model for the top ranked next actions in compact strict JSON
 - validates the model output against the server-provided legal actions
 - checks Anthropic availability with a tiny cached preflight call before joining a new bot-vs-bot game
@@ -52,8 +53,10 @@ Bot-vs-bot play is also enabled by default:
 Anthropic prompting defaults:
 
 - system prompt carries a ruleset-specific summary from `ruleset_summaries/*.md` and the overall Kriegspiel scene
+- the stable system prompt also carries a cacheable strategy reference; the current turn JSON remains in the uncached user prompt
 - user prompt is stateless, uses compact keys, and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
-- Anthropic prompt caching is enabled with a 1-hour TTL by default, with an explicit cache marker on the stable system prompt
+- Anthropic prompt caching is enabled with a 5-minute TTL by default, with an explicit cache marker on the stable system prompt; set `ANTHROPIC_CACHE_TTL=1h` only when requests may be spaced more than 5 minutes apart
+- verify prompt caching through `cache_creation_input_tokens` on the first matching request and `cache_read_input_tokens` on later matching requests
 - Anthropic tool use is disabled by default to keep each request smaller; set `ANTHROPIC_USE_TOOLS=true` to force tool-calling output
 - the bot asks for the top 10 ranked candidate actions by default
 - if a batch fails, it asks the model for the next batch of compact move candidates

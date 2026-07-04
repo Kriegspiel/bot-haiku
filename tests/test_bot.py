@@ -160,6 +160,12 @@ class BotTests(unittest.TestCase):
         self.assertIn(summary, system_prompt)
         self.assertNotIn("Cincinnati", system_prompt)
 
+    def test_build_system_prompt_is_large_enough_for_haiku_cache(self) -> None:
+        system_prompt = bot.build_system_prompt("berkeley_any")
+
+        self.assertIn("Stable strategy checklist", system_prompt)
+        self.assertGreaterEqual(len(system_prompt.split()), bot.MIN_CACHEABLE_SYSTEM_PROMPT_WORDS)
+
     def test_turn_snapshot_requests_exact_batch_when_enough_actions_exist(self) -> None:
         allowed_moves = ["a2a3", "b2b3", "c2c3", "d2d3", "e2e3", "f2f3", "g2g3", "h2h3", "b1c3"]
         state = {
@@ -186,6 +192,14 @@ class BotTests(unittest.TestCase):
             self.assertEqual(bot.anthropic_max_prompt_turns(), 12)
         with mock.patch.dict("os.environ", {"ANTHROPIC_MAX_PROMPT_TURNS": "invalid"}):
             self.assertEqual(bot.anthropic_max_prompt_turns(), 10)
+
+    def test_anthropic_cache_ttl_defaults_to_five_minutes(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(bot.anthropic_cache_ttl(), "5m")
+        with mock.patch.dict("os.environ", {"ANTHROPIC_CACHE_TTL": "1h"}, clear=True):
+            self.assertEqual(bot.anthropic_cache_ttl(), "1h")
+        with mock.patch.dict("os.environ", {"ANTHROPIC_CACHE_TTL": "invalid"}, clear=True):
+            self.assertEqual(bot.anthropic_cache_ttl(), "5m")
 
     def test_turn_snapshot_includes_at_least_ten_recent_turns_when_available(self) -> None:
         turns = [
@@ -557,7 +571,7 @@ class BotTests(unittest.TestCase):
                 bot.call_anthropic_messages(system_prompt="short system", messages=messages)
 
         payload = post.call_args.kwargs["json"]
-        self.assertEqual(payload["cache_control"], {"type": "ephemeral", "ttl": "1h"})
+        self.assertNotIn("cache_control", payload)
         self.assertEqual(payload["system"][0]["text"], "short system")
         self.assertEqual(payload["system"][0]["cache_control"], {"type": "ephemeral", "ttl": "1h"})
         self.assertNotIn("tool_choice", payload)
