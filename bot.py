@@ -610,17 +610,17 @@ def build_system_prompt(rule_variant: str) -> str:
         "You are a strong Kriegspiel player.\n"
         "Use only the provided private information and legal actions.\n"
         "Do not invent moves. Do not suggest illegal actions.\n"
-        "Return only a JSON object shaped as {\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}.\n"
+        "Return only a JSON object shaped as {\"m\":[\"e2e4\",\"d2d4\",\"ask_any\"]}.\n"
         "Return minified JSON with no spaces, newlines, or prose.\n"
         "Turn JSON keys: c=your color,t=side to move,mn=move number,fen=private board FEN,"
         "mat=material,hist=recent scorecard,act=possible actions,moves=legal UCI moves,"
         "n=target candidate count,res=reserves,rej=rejected actions,fb=retry feedback.\n"
         "Colors inside mat/hist/res use w=white and b=black; hist items use n=turn,w=white entries,b=black entries.\n"
-        "Return exactly n unique candidate actions ordered strictly from best to worst priority.\n"
-        "Candidate 1 must be your best choice, candidate 2 your next-best choice, and so on.\n"
+        "Return exactly n unique m entries ordered strictly from best to worst priority.\n"
+        "Entry 1 must be your best choice, entry 2 your next-best choice, and so on.\n"
         "Prioritize strategically strong, tactically sound moves that are robust under uncertainty.\n"
-        "If action=move, uci must exactly match one moves item.\n"
-        "If action=ask_any, ask_any must appear in act and uci must be null.\n"
+        "Each move entry must exactly match one moves item.\n"
+        "Use the string ask_any only when ask_any appears in act.\n"
         "Do not explain the rules. Do not include prose outside the JSON object.\n\n"
         f"{rules_summary}\n"
     )
@@ -751,21 +751,13 @@ def action_schema() -> dict[str, Any]:
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "candidates": {
+                "m": {
                     "type": "array",
                     "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "action": {"type": "string", "enum": ["move", "ask_any"]},
-                            "uci": {"type": ["string", "null"]},
-                        },
-                        "required": ["action", "uci"],
-                    },
+                    "items": {"type": "string"},
                 }
             },
-            "required": ["candidates"],
+            "required": ["m"],
         },
         "strict": True,
     }
@@ -985,9 +977,26 @@ def normalize_decision(decision: dict[str, Any], state: dict[str, Any]) -> dict[
 
 
 def normalize_ranked_decisions(payload: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
     normalized: list[dict[str, Any]] = []
     seen: set[tuple[str, str | None]] = set()
+    compact_actions = payload.get("m") if isinstance(payload.get("m"), list) else None
+    if compact_actions is not None:
+        for item in compact_actions:
+            if not isinstance(item, str):
+                continue
+            text = item.strip()
+            candidate = {"action": "ask_any", "uci": None} if text == "ask_any" else {"action": "move", "uci": text}
+            decision = normalize_decision(candidate, state)
+            if decision is None:
+                continue
+            key = (decision["action"], decision["uci"])
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(decision)
+        return normalized
+
+    candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue

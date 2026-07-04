@@ -15,11 +15,17 @@ class BotTests(unittest.TestCase):
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
         decisions = bot.normalize_ranked_decisions(
+            {"m": ["E2E4", "e2e4", "a2a4", "ask_any"]},
+            state,
+        )
+        self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}, {"action": "ask_any", "uci": None}])
+
+    def test_normalize_ranked_decisions_accepts_legacy_candidates(self) -> None:
+        state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
+        decisions = bot.normalize_ranked_decisions(
             {
                 "candidates": [
                     {"action": "move", "uci": "E2E4", "reason": "center"},
-                    {"action": "move", "uci": "e2e4", "reason": "duplicate"},
-                    {"action": "move", "uci": "a2a4", "reason": "illegal"},
                     {"action": "ask_any", "uci": None, "reason": "question"},
                 ]
             },
@@ -43,10 +49,10 @@ class BotTests(unittest.TestCase):
         self.assertEqual(decision, {"action": "ask_any", "uci": None})
 
     def test_extract_response_text_reads_nested_output(self) -> None:
-        payload = {"content": [{"type": "text", "text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}"}]}
+        payload = {"content": [{"type": "text", "text": "{\"m\":[\"e2e4\"]}"}]}
         self.assertEqual(
             bot.extract_response_text(payload),
-            "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\",\"reason\":\"center\"}]}",
+            "{\"m\":[\"e2e4\"]}",
         )
 
     def test_parse_model_decision_reads_anthropic_tool_use(self) -> None:
@@ -56,15 +62,15 @@ class BotTests(unittest.TestCase):
                 {
                     "type": "tool_use",
                     "name": bot.ACTION_SCHEMA_NAME,
-                    "input": {"candidates": [{"action": "move", "uci": "e2e4"}]},
+                    "input": {"m": ["e2e4"]},
                 },
             ]
         }
-        self.assertEqual(bot.parse_model_decision(payload), {"candidates": [{"action": "move", "uci": "e2e4"}]})
+        self.assertEqual(bot.parse_model_decision(payload), {"m": ["e2e4"]})
 
     def test_parse_model_decision_accepts_trailing_text_after_json(self) -> None:
-        payload = {"content": [{"type": "text", "text": "{\"candidates\":[{\"action\":\"move\",\"uci\":\"e2e4\"}]}\nDone."}]}
-        self.assertEqual(bot.parse_model_decision(payload), {"candidates": [{"action": "move", "uci": "e2e4"}]})
+        payload = {"content": [{"type": "text", "text": "{\"m\":[\"e2e4\"]}\nDone."}]}
+        self.assertEqual(bot.parse_model_decision(payload), {"m": ["e2e4"]})
 
     def test_fallback_prefers_center_moves(self) -> None:
         state = {"possible_actions": ["move"], "allowed_moves": ["a2a3", "e2e4", "h2h3"]}
@@ -107,6 +113,7 @@ class BotTests(unittest.TestCase):
         )
         self.assertIn("Berkeley + Any", system_prompt)
         self.assertNotIn("I. Introduction", system_prompt)
+        self.assertIn("{\"m\":[\"e2e4\",\"d2d4\",\"ask_any\"]}", system_prompt)
         self.assertIn("Return minified JSON", system_prompt)
         self.assertIn("Turn JSON keys: c=your color", system_prompt)
         self.assertIn("\"fen\":\"fen\"", user_prompt)
@@ -362,15 +369,16 @@ class BotTests(unittest.TestCase):
             {"supported_rule_variants": list(bot.SUPPORTED_RULE_VARIANTS)},
         )
 
-    def test_action_schema_does_not_request_unused_reasons(self) -> None:
-        candidate_schema = bot.action_schema()["schema"]["properties"]["candidates"]["items"]
-        self.assertNotIn("reason", candidate_schema["properties"])
-        self.assertEqual(candidate_schema["required"], ["action", "uci"])
+    def test_action_schema_uses_compact_move_list(self) -> None:
+        schema = bot.action_schema()["schema"]
+        self.assertEqual(schema["required"], ["m"])
+        self.assertNotIn("candidates", schema["properties"])
+        self.assertEqual(schema["properties"]["m"]["items"], {"type": "string"})
 
     def test_action_schema_omits_anthropic_unsupported_array_max_items(self) -> None:
-        candidates_schema = bot.action_schema()["schema"]["properties"]["candidates"]
-        self.assertEqual(candidates_schema["minItems"], 1)
-        self.assertNotIn("maxItems", candidates_schema)
+        move_list_schema = bot.action_schema()["schema"]["properties"]["m"]
+        self.assertEqual(move_list_schema["minItems"], 1)
+        self.assertNotIn("maxItems", move_list_schema)
 
     def test_anthropic_usage_cost_usd_accounts_for_cache_ttl(self) -> None:
         usage = {
@@ -399,7 +407,7 @@ class BotTests(unittest.TestCase):
             "scoresheet": {"viewer_color": "white", "turns": []},
         }
         raw_response = {
-            "content": [{"type": "text", "text": json.dumps({"candidates": [{"action": "move", "uci": "e2e4"}]})}],
+            "content": [{"type": "text", "text": json.dumps({"m": ["e2e4"]})}],
             "usage": {"cache_read_input_tokens": 50, "cache_creation_input_tokens": 10},
         }
         with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):

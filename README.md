@@ -9,7 +9,7 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
 - builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
-- asks an Anthropic Haiku model for the top ranked next actions in strict JSON
+- asks an Anthropic Haiku model for the top ranked next actions in compact strict JSON
 - validates the model output against the server-provided legal actions
 - checks Anthropic availability with a tiny cached preflight call before joining a new bot-vs-bot game
 - skips the join if Anthropic is unavailable or out of quota
@@ -56,7 +56,7 @@ Anthropic prompting defaults:
 - Anthropic prompt caching is enabled with a 1-hour TTL by default, with an explicit cache marker on the stable system prompt
 - Anthropic tool use is disabled by default to keep each request smaller; set `ANTHROPIC_USE_TOOLS=true` to force tool-calling output
 - the bot asks for the top 10 ranked candidate actions by default
-- if a batch fails, it asks the model for the next batch of candidates
+- if a batch fails, it asks the model for the next batch of compact move candidates
 - defaults can be tuned with:
   - `ANTHROPIC_MODEL=claude-haiku-4-5-20251001`
   - `ANTHROPIC_MODEL_BATCH_SIZE=10`
