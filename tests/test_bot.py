@@ -405,6 +405,28 @@ class BotTests(unittest.TestCase):
         self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.00155)
         self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.0014)
 
+    def test_anthropic_usage_cost_usd_reads_pricing_env(self) -> None:
+        usage = {
+            "input_tokens": 1000,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 500,
+            "cache_creation_input_tokens": 200,
+        }
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_INPUT_USD_PER_MILLION_TOKENS": "2.00",
+                "ANTHROPIC_OUTPUT_USD_PER_MILLION_TOKENS": "10.00",
+                "ANTHROPIC_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS": "0.20",
+                "ANTHROPIC_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS": "2.50",
+                "ANTHROPIC_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS": "4.00",
+            },
+            clear=False,
+        ):
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.0031)
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.0028)
+
     def test_choose_ranked_actions_is_stateless(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
