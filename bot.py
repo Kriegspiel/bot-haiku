@@ -339,12 +339,12 @@ def register_bot() -> None:
     response = requests.post(
         f"{base_url()}/auth/bots/register",
         json={
-            "username": os.environ.get("KRIEGSPIEL_BOT_USERNAME", "haiku"),
-            "display_name": os.environ.get("KRIEGSPIEL_BOT_DISPLAY_NAME", "Haiku"),
+            "username": os.environ.get("KRIEGSPIEL_BOT_USERNAME", "llm_haiku"),
+            "display_name": os.environ.get("KRIEGSPIEL_BOT_DISPLAY_NAME", "LLM Haiku (bot)"),
             "owner_email": os.environ.get("KRIEGSPIEL_BOT_OWNER_EMAIL", "bot-haiku@kriegspiel.org"),
             "description": os.environ.get(
                 "KRIEGSPIEL_BOT_DESCRIPTION",
-                "Model-driven Kriegspiel bot that chooses moves using Claude Haiku model.",
+                "LLM Haiku (bot) Kriegspiel model bot.",
             ),
             "listed": True,
             "supported_rule_variants": supported_rule_variants(),
@@ -1389,7 +1389,7 @@ def main() -> None:
     load_env_file()
     maybe_restore_token()
 
-    parser = argparse.ArgumentParser(description="Run the Kriegspiel Haiku bot.")
+    parser = argparse.ArgumentParser(description="Run the Kriegspiel LLM Haiku (bot) runtime.")
     parser.add_argument("--register", action="store_true", help="Register the bot and persist the returned token.")
     parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine/active polls.")
     args = parser.parse_args()
