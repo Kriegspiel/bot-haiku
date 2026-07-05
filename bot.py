@@ -38,6 +38,7 @@ BOT_GAME_PICK_PROBABILITY = 0.001
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS = 10
+DEFAULT_RESIGN_AFTER_MOVE_NUMBER = 256
 DEFAULT_ANTHROPIC_CACHE_TTL = "5m"
 MIN_CACHEABLE_SYSTEM_PROMPT_WORDS = 4200
 DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
@@ -646,6 +647,42 @@ def anthropic_max_prompt_turns() -> int:
         return DEFAULT_ANTHROPIC_MAX_PROMPT_TURNS
 
 
+def resign_after_move_number() -> int:
+    raw = os.environ.get("KRIEGSPIEL_RESIGN_AFTER_MOVE_NUMBER", str(DEFAULT_RESIGN_AFTER_MOVE_NUMBER)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_RESIGN_AFTER_MOVE_NUMBER
+
+
+def move_limit_for_state(state: dict[str, Any]) -> int:
+    if "llm_bot_ply_limit" not in state:
+        return resign_after_move_number()
+
+    raw = state.get("llm_bot_ply_limit")
+    if raw is None:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return resign_after_move_number()
+
+
+def completed_ply_count_for_state(state: dict[str, Any]) -> int:
+    raw = state.get("ply_count") if "ply_count" in state else state.get("move_number")
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def should_resign_for_move_limit(state: dict[str, Any]) -> bool:
+    limit = move_limit_for_state(state)
+    if limit <= 0:
+        return False
+    return completed_ply_count_for_state(state) >= limit
+
+
 def extract_recent_referee_items(scoresheet: dict[str, Any], *, limit: int = 8) -> list[str]:
     turns = scoresheet.get("turns") if isinstance(scoresheet.get("turns"), list) else []
     lines: list[str] = []
@@ -1191,6 +1228,17 @@ def maybe_play_game(game_id: str) -> bool:
         state = get_json(f"/game/{game_id}/state")
         if state.get("state") != "active" or state.get("turn") != state.get("your_color"):
             return acted
+        if should_resign_for_move_limit(state):
+            result = post_json(f"/game/{game_id}/resign")
+            clear_conversation_state(game_id)
+            logger.info(
+                "%s: resigned at move %s after reaching move limit %s -> %s",
+                game_id,
+                completed_ply_count_for_state(state),
+                move_limit_for_state(state),
+                result.get("result"),
+            )
+            return True
         if isinstance(metadata.get("rule_variant"), str):
             state["rule_variant"] = metadata["rule_variant"]
 

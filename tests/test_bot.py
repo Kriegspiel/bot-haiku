@@ -82,6 +82,41 @@ class BotTests(unittest.TestCase):
         decisions = bot.fallback_ranked_actions(state)
         self.assertEqual(decisions, [{"action": "move", "uci": "e2e4"}])
 
+    def test_should_resign_for_move_limit_defaults_to_move_256(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(bot.should_resign_for_move_limit({"move_number": 255}))
+            self.assertTrue(bot.should_resign_for_move_limit({"move_number": 256}))
+
+    def test_should_resign_for_move_limit_uses_backend_ply_limit(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(bot.should_resign_for_move_limit({"move_number": 999, "ply_count": 127, "llm_bot_ply_limit": 128}))
+            self.assertTrue(bot.should_resign_for_move_limit({"move_number": 2, "ply_count": 128, "llm_bot_ply_limit": 128}))
+
+    def test_should_resign_for_move_limit_disables_default_when_backend_is_unlimited(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(bot.should_resign_for_move_limit({"move_number": 999, "ply_count": 999, "llm_bot_ply_limit": None}))
+
+    def test_maybe_play_game_resigns_at_move_limit_before_model_call(self) -> None:
+        state = {
+            "state": "active",
+            "turn": "white",
+            "your_color": "white",
+            "move_number": 3,
+            "ply_count": 128,
+            "llm_bot_ply_limit": 128,
+        }
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with mock.patch.object(bot, "get_conversation_state", return_value={}):
+                with mock.patch.object(bot, "get_json", side_effect=[{"rule_variant": "berkeley_any"}, state]):
+                    with mock.patch.object(bot, "post_json", return_value={"result": {"winner": "black", "reason": "resignation"}}) as post_json:
+                        with mock.patch.object(bot, "clear_conversation_state") as clear_conversation_state:
+                            with mock.patch.object(bot, "choose_ranked_actions") as choose_ranked_actions:
+                                self.assertTrue(bot.maybe_play_game("gid1"))
+
+        post_json.assert_called_once_with("/game/gid1/resign")
+        clear_conversation_state.assert_called_once_with("gid1")
+        choose_ranked_actions.assert_not_called()
+
     def test_build_prompts_split_rules_and_state(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
