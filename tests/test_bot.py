@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -11,6 +14,29 @@ class BotTests(unittest.TestCase):
     def setUp(self) -> None:
         bot._ANTHROPIC_PREFLIGHT_CACHE.update({"ready": None, "expires_at": 0.0, "reason": "unchecked"})
         bot._MODEL_AVAILABILITY_REPORT_CACHE.update({"ready": None, "reason": "", "reported_at": 0.0})
+        bot.configure_runtime_paths()
+
+    def tearDown(self) -> None:
+        bot.configure_runtime_paths()
+
+    def test_runtime_paths_isolate_instance_env_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env_path = tmp_path / "model.env"
+            state_path = tmp_path / "state" / "model.json"
+            env_path.write_text(
+                "KRIEGSPIEL_BOT_USERNAME=llm_sonnet5\nANTHROPIC_MODEL=claude-sonnet-5-20260701\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict("os.environ", {}, clear=True):
+                bot.configure_runtime_paths(env_path=env_path, state_path=state_path)
+                bot.load_env_file()
+                bot.save_token("token-1")
+
+                self.assertEqual(os.environ["KRIEGSPIEL_BOT_USERNAME"], "llm_sonnet5")
+                self.assertEqual(os.environ["ANTHROPIC_MODEL"], "claude-sonnet-5-20260701")
+                self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["token"], "token-1")
 
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}

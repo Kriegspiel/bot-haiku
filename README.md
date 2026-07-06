@@ -33,6 +33,26 @@ Keep those summaries short and update them when a ruleset behavior that matters 
 
 By default the registration email is `bot-haiku@kriegspiel.org`.
 
+## Multiple Model Instances
+
+Use separate env and state files when running one independent Anthropic bot per
+model:
+
+```bash
+python bot.py \
+  --env-file instances/sonnet5.env \
+  --state-file instances/sonnet5-state.json \
+  --register
+
+python bot.py \
+  --env-file instances/sonnet5.env \
+  --state-file instances/sonnet5-state.json
+```
+
+Each instance env must have its own Kriegspiel bot identity and
+`ANTHROPIC_MODEL`. `ks-deploy bot-instance-bootstrap bot-haiku ...` renders this
+shape for production instances.
+
 By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`

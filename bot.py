@@ -26,8 +26,10 @@ from typing import Any
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent
-STATE_PATH = BASE_DIR / ".bot-state.json"
-ENV_PATH = BASE_DIR / ".env"
+DEFAULT_STATE_PATH = BASE_DIR / ".bot-state.json"
+DEFAULT_ENV_PATH = BASE_DIR / ".env"
+STATE_PATH = DEFAULT_STATE_PATH
+ENV_PATH = DEFAULT_ENV_PATH
 RULESET_SUMMARY_DIR = BASE_DIR / "ruleset_summaries"
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_ANTHROPIC_OUTPUT_TOKENS = 512
@@ -103,8 +105,14 @@ _ANTHROPIC_PREFLIGHT_CACHE = {"ready": None, "expires_at": 0.0, "reason": "unche
 _MODEL_AVAILABILITY_REPORT_CACHE = {"ready": None, "reason": "", "reported_at": 0.0}
 
 
-def load_env_file(path: str | Path = ENV_PATH) -> None:
-    env_path = Path(path)
+def configure_runtime_paths(*, env_path: str | Path | None = None, state_path: str | Path | None = None) -> None:
+    global ENV_PATH, STATE_PATH
+    ENV_PATH = Path(env_path).expanduser().resolve() if env_path else DEFAULT_ENV_PATH
+    STATE_PATH = Path(state_path).expanduser().resolve() if state_path else DEFAULT_STATE_PATH
+
+
+def load_env_file(path: str | Path | None = None) -> None:
+    env_path = Path(path) if path is not None else ENV_PATH
     if not env_path.exists():
         return
 
@@ -303,6 +311,7 @@ def load_state() -> dict[str, Any]:
 
 
 def save_state(state: dict[str, Any]) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, indent=2))
 
 
@@ -1412,13 +1421,24 @@ def run_loop(poll_seconds: float) -> None:
 
 
 def main() -> None:
-    load_env_file()
-    maybe_restore_token()
-
     parser = argparse.ArgumentParser(description="Run the Kriegspiel LLM Haiku (bot) runtime.")
+    parser.add_argument(
+        "--env-file",
+        default=os.environ.get("KRIEGSPIEL_BOT_ENV_FILE", str(DEFAULT_ENV_PATH)),
+        help="Path to the bot instance env file.",
+    )
+    parser.add_argument(
+        "--state-file",
+        default=os.environ.get("KRIEGSPIEL_BOT_STATE_FILE", str(DEFAULT_STATE_PATH)),
+        help="Path to the bot instance state file.",
+    )
     parser.add_argument("--register", action="store_true", help="Register the bot and persist the returned token.")
     parser.add_argument("--poll-seconds", type=float, default=3.0, help="Seconds between /game/mine/active polls.")
     args = parser.parse_args()
+
+    configure_runtime_paths(env_path=args.env_file, state_path=args.state_file)
+    load_env_file()
+    maybe_restore_token()
 
     if args.register:
         register_bot()
