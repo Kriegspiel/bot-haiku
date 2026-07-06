@@ -462,6 +462,40 @@ class BotTests(unittest.TestCase):
             self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.0031)
             self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.0028)
 
+    def test_log_anthropic_usage_reports_backend_usage_when_token_configured(self) -> None:
+        payload = {
+            "id": "msg_1",
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 200,
+            },
+        }
+
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_TOKEN": "token"}, clear=False):
+            with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
+                bot.log_anthropic_usage(game_id="gid1", model="haiku", payload=payload)
+
+        post_json.assert_called_once()
+        path, usage_payload = post_json.call_args.args
+        self.assertEqual(path, "/bots/usage")
+        self.assertEqual(
+            usage_payload,
+            {
+                "game_id": "gid1",
+                "provider": "anthropic",
+                "model": "haiku",
+                "response_id": "msg_1",
+                "input_tokens": 1000,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 200,
+                "total_tokens": 1720,
+                "cost_usd": bot.anthropic_usage_cost_usd(payload["usage"], cache_ttl=bot.anthropic_cache_ttl()),
+            },
+        )
+
     def test_choose_ranked_actions_is_stateless(self) -> None:
         state = {
             "rule_variant": "berkeley_any",
