@@ -359,6 +359,39 @@ class BotTests(unittest.TestCase):
         games = [{"state": "active"} for _ in range(5)]
         self.assertFalse(bot.should_create_lobby_game(games))
 
+    def test_lobby_create_cooldown_uses_tier_and_override(self) -> None:
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_LLM_BOT_TIER": "T4"}, clear=False):
+            self.assertEqual(bot.lobby_create_cooldown_seconds(), 21600)
+        with mock.patch.dict(
+            "os.environ",
+            {"KRIEGSPIEL_LLM_BOT_TIER": "T4", "KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS": "7200"},
+            clear=False,
+        ):
+            self.assertEqual(bot.lobby_create_cooldown_seconds(), 7200)
+
+    def test_can_create_lobby_game_uses_create_cooldown(self) -> None:
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_LLM_BOT_TIER": "T3"}, clear=False):
+            with mock.patch.object(bot, "load_state", return_value={"last_lobby_game_created_at": 100}):
+                self.assertFalse(bot.can_create_lobby_game(now=10899))
+                self.assertTrue(bot.can_create_lobby_game(now=10900))
+
+    def test_maybe_create_lobby_game_records_creation(self) -> None:
+        saved_states = []
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME": "true"}, clear=False):
+            with mock.patch.object(bot, "load_state", return_value={}):
+                with mock.patch.object(bot, "save_state", side_effect=saved_states.append):
+                    with mock.patch.object(bot.time, "time", return_value=4000.0):
+                        with mock.patch.object(bot, "get_json", return_value={"games": []}):
+                            with mock.patch.object(
+                                bot,
+                                "post_json",
+                                return_value={"game_id": "g1", "game_code": "ABC123"},
+                            ) as post_json:
+                                self.assertTrue(bot.maybe_create_lobby_game([]))
+
+        post_json.assert_called_once_with("/game/create", bot.create_payload())
+        self.assertEqual(saved_states[-1]["last_lobby_game_created_at"], 4000.0)
+
     def test_open_bot_lobby_candidates_only_include_other_bot_waiting_games(self) -> None:
         with mock.patch.dict("os.environ", {"KRIEGSPIEL_BOT_USERNAME": "llm_haiku"}):
             candidates = bot.open_bot_lobby_candidates(
@@ -616,6 +649,11 @@ class BotTests(unittest.TestCase):
                 with mock.patch.object(bot, "get_json") as get_json:
                     self.assertFalse(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
                     get_json.assert_not_called()
+
+    def test_can_attempt_bot_join_uses_ten_minute_cooldown(self) -> None:
+        with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 100}):
+            self.assertFalse(bot.can_attempt_bot_join(now=699))
+            self.assertTrue(bot.can_attempt_bot_join(now=700))
 
     def test_maybe_join_bot_lobby_game_joins_when_probability_hits(self) -> None:
         games = []
