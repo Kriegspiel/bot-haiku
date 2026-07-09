@@ -5,7 +5,8 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 ## What it does
 
 - registers as a listed Kriegspiel bot
-- polls assigned games from the live API
+- runs one bot process per bot identity/model instance
+- polls assigned games from the main process and runs one lightweight runner thread per active game
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 1% probability while still under its active-game cap
 - builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
@@ -33,6 +34,26 @@ Keep those summaries short and update them when a ruleset behavior that matters 
 
 By default the registration email is `bot-haiku@kriegspiel.org`.
 
+## Multiple Model Instances
+
+Use separate env and state files when running one independent Anthropic bot per
+model:
+
+```bash
+python bot.py \
+  --env-file instances/sonnet5.env \
+  --state-file instances/sonnet5-state.json \
+  --register
+
+python bot.py \
+  --env-file instances/sonnet5.env \
+  --state-file instances/sonnet5-state.json
+```
+
+Each instance env must have its own Kriegspiel bot identity and
+`ANTHROPIC_MODEL`. `ks-deploy bot-instance-bootstrap bot-haiku ...` renders this
+shape for production instances.
+
 By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
@@ -40,6 +61,8 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
 - `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any,cincinnati,wild16,rand,english,crazykrieg`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
+- `KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT=100`
+- `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS=5`
 - `KRIEGSPIEL_LLM_BOT_TIER=T2|T3|T4`
 - `KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS=3600|10800|21600`
 
@@ -51,6 +74,16 @@ Bot-vs-bot play is also enabled by default:
 - it will try to join one with 1% probability on that scan
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps the local cooldown even when no join candidate is found, matching backend bot-join limits and avoiding tight lobby scans
+
+Assigned active games are handled by per-game runner threads inside the same
+process. The main loop discovers active games with
+`KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT`, handles lobby create/join policy, and
+starts missing runners. Existing runners are not stopped only because a later
+capped discovery response omits them; each runner exits when its own game-state
+poll reports completion or unavailability. Anthropic calls across all game
+runners are bounded by `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS`, which defaults to
+`5`. Backend polling, lobby scans, sleeps, and fallback move selection do not
+hold that provider-call gate.
 
 Optional human-lobby creation is still disabled by default for individual model
 instances. If an operator enables one selected model instance as the random

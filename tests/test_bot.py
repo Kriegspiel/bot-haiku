@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -11,6 +15,30 @@ class BotTests(unittest.TestCase):
     def setUp(self) -> None:
         bot._ANTHROPIC_PREFLIGHT_CACHE.update({"ready": None, "expires_at": 0.0, "reason": "unchecked"})
         bot._MODEL_AVAILABILITY_REPORT_CACHE.update({"ready": None, "reason": "", "reported_at": 0.0})
+        bot.configure_runtime_paths()
+        bot.configure_model_call_semaphore(bot.DEFAULT_MAX_CONCURRENT_MODEL_CALLS)
+
+    def tearDown(self) -> None:
+        bot.configure_runtime_paths()
+
+    def test_runtime_paths_isolate_instance_env_and_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env_path = tmp_path / "model.env"
+            state_path = tmp_path / "state" / "model.json"
+            env_path.write_text(
+                "KRIEGSPIEL_BOT_USERNAME=llm_sonnet5\nANTHROPIC_MODEL=claude-sonnet-5-20260701\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict("os.environ", {}, clear=True):
+                bot.configure_runtime_paths(env_path=env_path, state_path=state_path)
+                bot.load_env_file()
+                bot.save_token("token-1")
+
+                self.assertEqual(os.environ["KRIEGSPIEL_BOT_USERNAME"], "llm_sonnet5")
+                self.assertEqual(os.environ["ANTHROPIC_MODEL"], "claude-sonnet-5-20260701")
+                self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["token"], "token-1")
 
     def test_normalize_ranked_decisions_filters_invalid_and_duplicates(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
@@ -219,6 +247,28 @@ class BotTests(unittest.TestCase):
         self.assertEqual(payload["n"], 10)
         self.assertIn("Return exactly n", system_prompt)
         self.assertNotIn("Return up to n", system_prompt)
+
+    def test_max_concurrent_model_calls_parses_default_and_custom_env(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(bot.max_concurrent_model_calls(), 5)
+        with mock.patch.dict("os.environ", {"LLM_BOT_MAX_CONCURRENT_MODEL_CALLS": "3"}):
+            self.assertEqual(bot.max_concurrent_model_calls(), 3)
+        with mock.patch.dict("os.environ", {"LLM_BOT_MAX_CONCURRENT_MODEL_CALLS": "0"}):
+            self.assertEqual(bot.max_concurrent_model_calls(), 1)
+        with mock.patch.dict("os.environ", {"LLM_BOT_MAX_CONCURRENT_MODEL_CALLS": "invalid"}):
+            self.assertEqual(bot.max_concurrent_model_calls(), 5)
+
+    def test_active_game_discovery_limit_parses_default_and_custom_env(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(bot.active_game_discovery_limit(), 100)
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT": "40"}):
+            self.assertEqual(bot.active_game_discovery_limit(), 40)
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT": "0"}):
+            self.assertEqual(bot.active_game_discovery_limit(), 1)
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT": "250"}):
+            self.assertEqual(bot.active_game_discovery_limit(), 100)
+        with mock.patch.dict("os.environ", {"KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT": "invalid"}):
+            self.assertEqual(bot.active_game_discovery_limit(), 100)
 
     def test_anthropic_max_prompt_turns_has_ten_turn_floor(self) -> None:
         with mock.patch.dict("os.environ", {"ANTHROPIC_MAX_PROMPT_TURNS": "5"}):
@@ -754,6 +804,97 @@ class BotTests(unittest.TestCase):
                                         with mock.patch.object(bot, "post_json") as post_json:
                                             self.assertFalse(bot.maybe_join_bot_lobby_game(games, rng=bot.random))
                                             post_json.assert_not_called()
+
+    def test_runner_scheduler_starts_one_runner_per_game_without_duplicates(self) -> None:
+        class FakeRunner:
+            def __init__(self, game_id: str) -> None:
+                self.game_id = game_id
+                self.started = 0
+                self.stopped = 0
+                self.joined = 0
+                self.alive = False
+
+            def start(self) -> None:
+                self.started += 1
+                self.alive = True
+
+            def stop(self) -> None:
+                self.stopped += 1
+                self.alive = False
+
+            def join(self, timeout: float | None = None) -> None:  # noqa: ARG002
+                self.joined += 1
+
+            def is_alive(self) -> bool:
+                return self.alive
+
+        created: dict[str, FakeRunner] = {}
+
+        def runner_factory(game_id: str) -> FakeRunner:
+            runner = FakeRunner(game_id)
+            created[game_id] = runner
+            return runner
+
+        scheduler = bot.GameRunnerScheduler(poll_seconds=0.01, runner_factory=runner_factory)
+        games = [
+            {"state": "active", "game_id": "g1"},
+            {"state": "active", "game_id": "g2"},
+            {"state": "waiting", "game_id": "w1"},
+        ]
+
+        scheduler.reconcile(games)
+        scheduler.reconcile(games)
+
+        self.assertEqual(set(created), {"g1", "g2"})
+        self.assertEqual(created["g1"].started, 1)
+        self.assertEqual(created["g2"].started, 1)
+
+        scheduler.reconcile([{"state": "active", "game_id": "g2"}])
+
+        self.assertEqual(created["g1"].stopped, 0)
+        self.assertIn("g1", scheduler.runners)
+        self.assertIn("g2", scheduler.runners)
+
+        created["g1"].alive = False
+        scheduler.reconcile([{"state": "active", "game_id": "g2"}])
+
+        self.assertNotIn("g1", scheduler.runners)
+        self.assertIn("g2", scheduler.runners)
+
+    def test_one_slow_game_runner_does_not_block_another_runner(self) -> None:
+        slow_started = threading.Event()
+        release_slow = threading.Event()
+        fast_played = threading.Event()
+
+        def fake_get_json(path: str) -> dict[str, str]:
+            game_id = path.split("/")[2]
+            return {"state": "active", "turn": "white", "your_color": "white", "game_id": game_id}
+
+        def fake_maybe_play_game(game_id: str) -> bool:
+            if game_id == "slow":
+                slow_started.set()
+                release_slow.wait(timeout=1)
+                return True
+            fast_played.set()
+            return True
+
+        slow_runner = bot.GameRunner("slow", poll_seconds=0.01)
+        fast_runner = bot.GameRunner("fast", poll_seconds=0.01)
+
+        with mock.patch.object(bot, "get_json", side_effect=fake_get_json):
+            with mock.patch.object(bot, "maybe_play_game", side_effect=fake_maybe_play_game):
+                slow_runner.start()
+                self.assertTrue(slow_started.wait(timeout=0.5))
+                fast_runner.start()
+                self.assertTrue(fast_played.wait(timeout=0.5))
+                slow_runner.stop()
+                fast_runner.stop()
+                release_slow.set()
+                slow_runner.join(timeout=1)
+                fast_runner.join(timeout=1)
+
+        self.assertFalse(slow_runner.is_alive())
+        self.assertFalse(fast_runner.is_alive())
 
 
 if __name__ == "__main__":
