@@ -36,8 +36,9 @@ DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_ANTHROPIC_OUTPUT_TOKENS = 512
 ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 1
-BOT_JOIN_COOLDOWN_SECONDS = 60
-BOT_GAME_PICK_PROBABILITY = 0.001
+DEFAULT_BOT_CREATE_COOLDOWN_SECONDS = 3600
+BOT_JOIN_COOLDOWN_SECONDS = 600
+BOT_GAME_PICK_PROBABILITY = 0.01
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 DEFAULT_MAX_CONCURRENT_MODEL_CALLS = 5
@@ -55,6 +56,17 @@ ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS = 5.00
 ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS = 0.10
 ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS = 1.25
 ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS = 2.00
+LLM_BOT_CREATE_COOLDOWN_SECONDS_BY_TIER = {
+    "t2": 3600,
+    "tier2": 3600,
+    "2": 3600,
+    "t3": 10800,
+    "tier3": 10800,
+    "3": 10800,
+    "t4": 21600,
+    "tier4": 21600,
+    "4": 21600,
+}
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
 LEGACY_DEFAULT_SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any")
@@ -512,6 +524,34 @@ def auto_create_enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def lobby_create_cooldown_seconds() -> int:
+    raw = os.environ.get("KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0, int(float(raw)))
+        except ValueError:
+            return DEFAULT_BOT_CREATE_COOLDOWN_SECONDS
+
+    tier = os.environ.get("KRIEGSPIEL_LLM_BOT_TIER", os.environ.get("KRIEGSPIEL_PUBLIC_BOT_TIER", "t2")).strip().lower()
+    return LLM_BOT_CREATE_COOLDOWN_SECONDS_BY_TIER.get(tier, DEFAULT_BOT_CREATE_COOLDOWN_SECONDS)
+
+
+def can_create_lobby_game(now: float | None = None) -> bool:
+    current = time.time() if now is None else now
+    last_created = load_state().get("last_lobby_game_created_at", 0)
+    try:
+        last_created = float(last_created)
+    except (TypeError, ValueError):
+        last_created = 0
+    return current - last_created >= lobby_create_cooldown_seconds()
+
+
+def record_lobby_game_created(now: float | None = None) -> None:
+    state = load_state()
+    state["last_lobby_game_created_at"] = time.time() if now is None else now
+    save_state(state)
+
+
 def max_active_games_before_create() -> int:
     raw = os.environ.get("KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE", str(DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE)).strip()
     try:
@@ -642,6 +682,8 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
 def should_create_lobby_game(games: list[dict[str, Any]]) -> bool:
     if not auto_create_enabled():
         return False
+    if not can_create_lobby_game():
+        return False
     if waiting_games(games):
         return False
     return len(active_games(games)) < max_active_games_before_create()
@@ -656,6 +698,7 @@ def maybe_create_lobby_game(games: list[dict[str, Any]]) -> bool:
         return False
 
     created = post_json("/game/create", create_payload())
+    record_lobby_game_created()
     logger.debug("created lobby game %s (%s)", created["game_id"], created["game_code"])
     return True
 

@@ -8,7 +8,7 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - runs one bot process per bot identity/model instance
 - polls assigned games from the main process and runs one lightweight runner thread per active game
 - does not create waiting lobby games by default
-- can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
+- can join another bot's waiting lobby game with 1% probability while still under its active-game cap
 - builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - adds a stable system-prompt strategy reference so Anthropic prompt caching is above Haiku's cacheable token threshold
 - asks an Anthropic Haiku model for the top ranked next actions in compact strict JSON
@@ -63,13 +63,15 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
 - `KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT=100`
 - `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS=5`
+- `KRIEGSPIEL_LLM_BOT_TIER=T2|T3|T4`
+- `KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS=3600|10800|21600`
 
 Bot-vs-bot play is also enabled by default:
 
-- the bot samples open waiting games at most once per minute
+- the bot samples open waiting games at most once every 10 minutes
 - it will only consider games created by another bot
-- it samples that decision at most once per minute
-- it will try to join one with 0.1% probability on that minute check
+- it samples that decision at most once every 10 minutes
+- it will try to join one with 1% probability on that scan
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps the local cooldown even when no join candidate is found, matching backend bot-join limits and avoiding tight lobby scans
 
@@ -82,6 +84,12 @@ poll reports completion or unavailability. Anthropic calls across all game
 runners are bounded by `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS`, which defaults to
 `5`. Backend polling, lobby scans, sleeps, and fallback move selection do not
 hold that provider-call gate.
+
+Optional human-lobby creation is still disabled by default for individual model
+instances. If an operator enables one selected model instance as the random
+tier representative, the built-in create cooldown defaults to T2 hourly, T3
+every 3 hours, and T4 every 6 hours; `KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS`
+overrides that cadence.
 
 Anthropic prompting defaults:
 
