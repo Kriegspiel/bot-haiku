@@ -5,7 +5,8 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 ## What it does
 
 - registers as a listed Kriegspiel bot
-- polls assigned games from the live API
+- runs one bot process per bot identity/model instance
+- polls assigned games from the main process and runs one lightweight runner thread per active game
 - does not create waiting lobby games by default
 - can join another bot's waiting lobby game with 0.1% probability while still under its active-game cap
 - builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
@@ -60,6 +61,8 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_AUTO_CREATE_PLAY_AS=white|black|random`
 - `KRIEGSPIEL_SUPPORTED_RULE_VARIANTS=berkeley,berkeley_any,cincinnati,wild16,rand,english,crazykrieg`
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
+- `KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT=100`
+- `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS=5`
 
 Bot-vs-bot play is also enabled by default:
 
@@ -69,6 +72,16 @@ Bot-vs-bot play is also enabled by default:
 - it will try to join one with 0.1% probability on that minute check
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps the local cooldown even when no join candidate is found, matching backend bot-join limits and avoiding tight lobby scans
+
+Assigned active games are handled by per-game runner threads inside the same
+process. The main loop discovers active games with
+`KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT`, handles lobby create/join policy, and
+starts missing runners. Existing runners are not stopped only because a later
+capped discovery response omits them; each runner exits when its own game-state
+poll reports completion or unavailability. Anthropic calls across all game
+runners are bounded by `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS`, which defaults to
+`5`. Backend polling, lobby scans, sleeps, and fallback move selection do not
+hold that provider-call gate.
 
 Anthropic prompting defaults:
 
