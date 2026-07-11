@@ -5,6 +5,11 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## T4 Opus Model ID
+
+- **T4 Catalogue**: use the current Anthropic API model ID
+  `claude-opus-4-8` for the Opus 4.8 instance template.
+
 ## T4 Opus Instance Template
 
 - **T4 Catalogue**: add an Anthropic Opus 4.8 instance template for
