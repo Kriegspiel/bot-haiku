@@ -120,8 +120,14 @@ class BotTests(unittest.TestCase):
             self.assertFalse(bot.should_resign_for_move_limit({"move_number": 999, "ply_count": 127, "llm_bot_ply_limit": 128}))
             self.assertTrue(bot.should_resign_for_move_limit({"move_number": 2, "ply_count": 128, "llm_bot_ply_limit": 128}))
 
+    def test_should_resign_for_move_limit_uses_backend_turn_limit(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(bot.should_resign_for_move_limit({"move_number": 999, "ply_count": 127, "llm_bot_turn_limit": 128}))
+            self.assertTrue(bot.should_resign_for_move_limit({"move_number": 2, "ply_count": 128, "llm_bot_turn_limit": 128}))
+
     def test_should_resign_for_move_limit_disables_default_when_backend_is_unlimited(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(bot.should_resign_for_move_limit({"move_number": 999, "ply_count": 999, "llm_bot_turn_limit": None}))
             self.assertFalse(bot.should_resign_for_move_limit({"move_number": 999, "ply_count": 999, "llm_bot_ply_limit": None}))
 
     def test_maybe_play_game_resigns_at_move_limit_before_model_call(self) -> None:

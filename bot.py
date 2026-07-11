@@ -788,16 +788,18 @@ def resign_after_move_number() -> int:
 
 
 def move_limit_for_state(state: dict[str, Any]) -> int:
-    if "llm_bot_ply_limit" not in state:
-        return resign_after_move_number()
+    for key in ("llm_bot_turn_limit", "llm_bot_ply_limit"):
+        if key not in state:
+            continue
+        raw = state.get(key)
+        if raw is None:
+            return 0
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return resign_after_move_number()
 
-    raw = state.get("llm_bot_ply_limit")
-    if raw is None:
-        return 0
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return resign_after_move_number()
+    return resign_after_move_number()
 
 
 def completed_ply_count_for_state(state: dict[str, Any]) -> int:

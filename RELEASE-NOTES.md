@@ -5,6 +5,13 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## T4 Opus Instance Template
+
+- **T4 Catalogue**: add an Anthropic Opus 4.8 instance template for
+  `llm_opus48`.
+- **Bot-vs-bot Caps**: honor the backend's current `llm_bot_turn_limit` field
+  before falling back to the legacy `llm_bot_ply_limit` field.
+
 ## Current Runtime Baseline
 
 - **Bot Identity**: `llm_haiku`, the Anthropic Haiku model bot.
