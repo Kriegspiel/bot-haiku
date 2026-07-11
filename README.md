@@ -54,6 +54,10 @@ Each instance env must have its own Kriegspiel bot identity and
 `ANTHROPIC_MODEL`. `ks-deploy bot-instance-bootstrap bot-haiku ...` renders this
 shape for production instances.
 
+Checked-in T4 templates live under `instances/` with `.env.example` suffixes.
+Copy one to `.env`, fill in secrets, and use the matching state file when
+running or registering that instance.
+
 By default the bot does not create open lobby games on its own. That behavior is controlled with:
 
 - `KRIEGSPIEL_AUTO_CREATE_LOBBY_GAME=true|false`
