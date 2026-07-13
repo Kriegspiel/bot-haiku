@@ -711,11 +711,40 @@ class BotTests(unittest.TestCase):
             self.assertFalse(bot.can_attempt_bot_join(now=699))
             self.assertTrue(bot.can_attempt_bot_join(now=700))
 
+    def test_bot_game_pick_probability_uses_tier_defaults(self) -> None:
+        cases = [
+            ("T2", 0.0010),
+            ("tier3", 0.0005),
+            ("4", 0.0002),
+            ("t5", 0.0001),
+            ("unknown", bot.DEFAULT_BOT_GAME_PICK_PROBABILITY),
+        ]
+        for tier, expected in cases:
+            with self.subTest(tier=tier):
+                with mock.patch.dict("os.environ", {"KRIEGSPIEL_LLM_BOT_TIER": tier}, clear=True):
+                    self.assertEqual(bot.bot_game_pick_probability(), expected)
+
+    def test_bot_game_pick_probability_allows_clamped_env_override(self) -> None:
+        with mock.patch.dict(
+            "os.environ",
+            {"KRIEGSPIEL_LLM_BOT_TIER": "T3", "KRIEGSPIEL_BOT_GAME_PICK_PROBABILITY": "0.25"},
+            clear=True,
+        ):
+            self.assertEqual(bot.bot_game_pick_probability(), 0.25)
+        with mock.patch.dict("os.environ", {"BOT_GAME_PICK_PROBABILITY": "2"}, clear=True):
+            self.assertEqual(bot.bot_game_pick_probability(), 1.0)
+        with mock.patch.dict("os.environ", {"BOT_GAME_PICK_PROBABILITY": "not-a-number"}, clear=True):
+            self.assertEqual(bot.bot_game_pick_probability(), bot.DEFAULT_BOT_GAME_PICK_PROBABILITY)
+
     def test_maybe_join_bot_lobby_game_joins_when_probability_hits(self) -> None:
         games = []
         open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
 
-        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+        with mock.patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": "test-key", "KRIEGSPIEL_BOT_GAME_PICK_PROBABILITY": "0.01"},
+            clear=False,
+        ):
             with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
                 with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
                     with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):
@@ -799,7 +828,11 @@ class BotTests(unittest.TestCase):
         games = []
         open_games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
 
-        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
+        with mock.patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": "test-key", "KRIEGSPIEL_BOT_GAME_PICK_PROBABILITY": "0.01"},
+            clear=False,
+        ):
             with mock.patch.object(bot, "get_json", return_value={"games": open_games}):
                 with mock.patch.object(bot, "get_public_user", return_value={"role": "bot"}):
                     with mock.patch.object(bot, "load_state", return_value={"last_bot_game_join_attempt_at": 0}):

@@ -5,6 +5,14 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## Tiered Bot Join Budgets
+
+- **Lobby Policy**: derive bot-vs-bot join probability from
+  `KRIEGSPIEL_LLM_BOT_TIER` by default: T2 `0.0010`, T3 `0.0005`, T4
+  `0.0002`, and T5 `0.0001`.
+- **Operator Override**: allow `KRIEGSPIEL_BOT_GAME_PICK_PROBABILITY` or
+  `BOT_GAME_PICK_PROBABILITY` to override the tier default per instance.
+
 ## T4 Opus Model ID
 
 - **T4 Catalogue**: use the current Anthropic API model ID
