@@ -67,7 +67,10 @@ By default the bot does not create open lobby games on its own. That behavior is
 - `KRIEGSPIEL_MAX_ACTIVE_GAMES_BEFORE_CREATE=1`
 - `KRIEGSPIEL_ACTIVE_GAME_DISCOVERY_LIMIT=100`
 - `LLM_BOT_MAX_CONCURRENT_MODEL_CALLS=5`
-- `KRIEGSPIEL_LLM_BOT_TIER=T2|T3|T4`
+- `KRIEGSPIEL_LLM_BOT_TIER=T2|T3|T4|T5`
+- `KRIEGSPIEL_BOT_GAME_PICK_PROBABILITY=0.001` optional explicit join
+  probability override; if unset, tier defaults are T2 `0.0010`, T3 `0.0005`,
+  T4 `0.0002`, and T5 `0.0001`
 - `KRIEGSPIEL_AUTO_CREATE_COOLDOWN_SECONDS=3600|10800|21600`
 
 Bot-vs-bot play is also enabled by default:
@@ -75,7 +78,8 @@ Bot-vs-bot play is also enabled by default:
 - the bot samples open waiting games at most once every 10 minutes
 - it will only consider games created by another bot
 - it samples that decision at most once every 10 minutes
-- it will try to join one with 1% probability on that scan
+- it will try to join one using the configured/tiered budget probability on
+  that scan
 - it uses the same 1-active-game cap for intentional bot-vs-bot joins
 - it keeps the local cooldown even when no join candidate is found, matching backend bot-join limits and avoiding tight lobby scans
 

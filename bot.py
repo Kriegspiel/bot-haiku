@@ -38,7 +38,7 @@ ACTION_SCHEMA_NAME = "kriegspiel_next_action"
 DEFAULT_MAX_ACTIVE_GAMES_BEFORE_CREATE = 1
 DEFAULT_BOT_CREATE_COOLDOWN_SECONDS = 3600
 BOT_JOIN_COOLDOWN_SECONDS = 600
-BOT_GAME_PICK_PROBABILITY = 0.01
+DEFAULT_BOT_GAME_PICK_PROBABILITY = 0.01
 DEFAULT_MODEL_BATCH_SIZE = 10
 DEFAULT_MAX_MODEL_BATCHES_PER_TURN = 5
 DEFAULT_MAX_CONCURRENT_MODEL_CALLS = 5
@@ -66,6 +66,20 @@ LLM_BOT_CREATE_COOLDOWN_SECONDS_BY_TIER = {
     "t4": 21600,
     "tier4": 21600,
     "4": 21600,
+}
+BOT_GAME_PICK_PROBABILITY_BY_TIER = {
+    "t2": 0.0010,
+    "tier2": 0.0010,
+    "2": 0.0010,
+    "t3": 0.0005,
+    "tier3": 0.0005,
+    "3": 0.0005,
+    "t4": 0.0002,
+    "tier4": 0.0002,
+    "4": 0.0002,
+    "t5": 0.0001,
+    "tier5": 0.0001,
+    "5": 0.0001,
 }
 SUPPORTED_RULE_VARIANTS = ("berkeley", "berkeley_any", "cincinnati", "wild16", "rand", "english", "crazykrieg")
 DEFAULT_SUPPORTED_RULE_VARIANTS = ",".join(SUPPORTED_RULE_VARIANTS)
@@ -225,6 +239,20 @@ def env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def bot_game_pick_probability() -> float:
+    for env_name in ("BOT_GAME_PICK_PROBABILITY", "KRIEGSPIEL_BOT_GAME_PICK_PROBABILITY"):
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            continue
+        try:
+            return min(1.0, max(0.0, float(raw)))
+        except ValueError:
+            return DEFAULT_BOT_GAME_PICK_PROBABILITY
+
+    tier = os.environ.get("KRIEGSPIEL_LLM_BOT_TIER", os.environ.get("KRIEGSPIEL_PUBLIC_BOT_TIER", "")).strip().lower()
+    return BOT_GAME_PICK_PROBABILITY_BY_TIER.get(tier, DEFAULT_BOT_GAME_PICK_PROBABILITY)
 
 
 def anthropic_cache_ttl() -> str:
@@ -662,7 +690,7 @@ def maybe_join_bot_lobby_game(games: list[dict[str, Any]], *, rng: random.Random
     candidate = choose_bot_game_to_join(open_games, rng=rng)
     if not candidate:
         return False
-    if rng.random() >= BOT_GAME_PICK_PROBABILITY:
+    if rng.random() >= bot_game_pick_probability():
         return False
 
     ready, reason = anthropic_preflight_status()
