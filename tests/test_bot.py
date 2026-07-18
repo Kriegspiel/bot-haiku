@@ -773,14 +773,80 @@ class BotTests(unittest.TestCase):
             {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_MODEL": "claude-haiku-4-5-20251001"},
             clear=False,
         ):
-            with mock.patch.object(bot.requests, "get", return_value=response) as get:
-                with mock.patch.object(bot.requests, "post") as post:
-                    self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
-                    self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
+            with mock.patch.object(bot, "anthropic_monthly_budget_status", return_value=(True, "ok", None)):
+                with mock.patch.object(bot.requests, "get", return_value=response) as get:
+                    with mock.patch.object(bot.requests, "post") as post:
+                        self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
+                        self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
 
         get.assert_called_once()
         self.assertTrue(get.call_args.args[0].endswith("/models/claude-haiku-4-5-20251001"))
         self.assertEqual(get.call_args.kwargs["headers"]["x-api-key"], "test-key")
+        post.assert_not_called()
+
+    def test_anthropic_preflight_rejects_exhausted_monthly_budget_without_provider_request(self) -> None:
+        with mock.patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_MODEL": "claude-haiku-4-5-20251001"},
+            clear=False,
+        ):
+            with mock.patch.object(
+                bot,
+                "anthropic_monthly_budget_status",
+                return_value=(False, "anthropic_monthly_budget_exhausted", None),
+            ):
+                with mock.patch.object(bot.requests, "get") as get:
+                    self.assertEqual(bot.anthropic_preflight_status(), (False, "anthropic_monthly_budget_exhausted"))
+        get.assert_not_called()
+
+    def test_anthropic_call_settles_shared_monthly_budget_from_usage(self) -> None:
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "id": "msg_1",
+            "usage": {"input_tokens": 1000, "output_tokens": 100},
+        }
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Current turn JSON:\n{}"}]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "anthropic.json"
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "ANTHROPIC_API_KEY": "test-key",
+                    "ANTHROPIC_MODEL": "claude-test",
+                    "ANTHROPIC_INPUT_USD_PER_MILLION_TOKENS": "2",
+                    "ANTHROPIC_OUTPUT_USD_PER_MILLION_TOKENS": "10",
+                    "ANTHROPIC_MONTHLY_BUDGET_USD": "18",
+                    "ANTHROPIC_MONTHLY_BUDGET_STATE_PATH": str(state_path),
+                },
+                clear=False,
+            ):
+                with mock.patch.object(bot.requests, "post", return_value=response):
+                    bot.call_anthropic_messages(system_prompt="system", messages=messages)
+                snapshot = bot.anthropic_monthly_budget_ledger().status()
+
+        self.assertAlmostEqual(snapshot.spent_usd, 0.003)
+        self.assertAlmostEqual(snapshot.reserved_usd, 0)
+
+    def test_anthropic_call_does_not_run_when_monthly_budget_is_exhausted(self) -> None:
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Current turn JSON:\n{}"}]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "ANTHROPIC_API_KEY": "test-key",
+                    "ANTHROPIC_MODEL": "claude-test",
+                    "ANTHROPIC_INPUT_USD_PER_MILLION_TOKENS": "2",
+                    "ANTHROPIC_OUTPUT_USD_PER_MILLION_TOKENS": "10",
+                    "ANTHROPIC_MONTHLY_BUDGET_USD": "0",
+                    "ANTHROPIC_MONTHLY_BUDGET_STATE_PATH": str(Path(tmp) / "anthropic.json"),
+                },
+                clear=False,
+            ):
+                with mock.patch.object(bot, "report_model_availability"):
+                    with mock.patch.object(bot.requests, "post") as post:
+                        with self.assertRaisesRegex(bot.ProviderBudgetExhausted, "anthropic_monthly_budget_exhausted"):
+                            bot.call_anthropic_messages(system_prompt="system", messages=messages)
         post.assert_not_called()
 
     def test_call_anthropic_messages_uses_plain_json_by_default(self) -> None:
@@ -790,8 +856,10 @@ class BotTests(unittest.TestCase):
         messages = [{"role": "user", "content": [{"type": "text", "text": "Current turn JSON:\n{}"}]}]
 
         with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_CACHE_TTL": "1h"}, clear=False):
-            with mock.patch.object(bot.requests, "post", return_value=response) as post:
-                bot.call_anthropic_messages(system_prompt="short system", messages=messages)
+            with mock.patch.object(bot, "reserve_anthropic_request", return_value=mock.sentinel.budget):
+                with mock.patch.object(bot, "settle_anthropic_request", return_value=None):
+                    with mock.patch.object(bot.requests, "post", return_value=response) as post:
+                        bot.call_anthropic_messages(system_prompt="short system", messages=messages)
 
         payload = post.call_args.kwargs["json"]
         self.assertNotIn("cache_control", payload)
@@ -809,8 +877,10 @@ class BotTests(unittest.TestCase):
 
         env = {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_CACHE_TTL": "1h", "ANTHROPIC_USE_TOOLS": "true"}
         with mock.patch.dict("os.environ", env, clear=False):
-            with mock.patch.object(bot.requests, "post", return_value=response) as post:
-                bot.call_anthropic_messages(system_prompt="short system", messages=messages)
+            with mock.patch.object(bot, "reserve_anthropic_request", return_value=mock.sentinel.budget):
+                with mock.patch.object(bot, "settle_anthropic_request", return_value=None):
+                    with mock.patch.object(bot.requests, "post", return_value=response) as post:
+                        bot.call_anthropic_messages(system_prompt="short system", messages=messages)
 
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["tool_choice"], {"type": "tool", "name": bot.ACTION_SCHEMA_NAME})

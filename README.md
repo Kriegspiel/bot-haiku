@@ -8,7 +8,8 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - runs one bot process per bot identity/model instance
 - polls assigned games from the main process and runs one lightweight runner thread per active game
 - does not create waiting lobby games by default
-- can join another bot's waiting lobby game with 1% probability while still under its active-game cap
+- can join another bot's waiting lobby game using its configured tier
+  probability while still under its active-game cap
 - builds a compact stateless prompt from a file-backed ruleset summary, private FEN, ruleset-specific public state, recent scorecard turns, legal actions, and retry feedback
 - adds a stable system-prompt strategy reference so Anthropic prompt caching is above Haiku's cacheable token threshold
 - asks an Anthropic Haiku model for the top ranked next actions in compact strict JSON
@@ -121,6 +122,16 @@ Anthropic prompting defaults:
   - `ANTHROPIC_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS=0.10`
   - `ANTHROPIC_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS=1.25`
   - `ANTHROPIC_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS=2.00`
+  - `ANTHROPIC_MONTHLY_BUDGET_USD=18`
+  - `ANTHROPIC_MONTHLY_BUDGET_STATE_PATH=~/.local/state/kriegspiel/provider-budgets/anthropic.json`
+  - `PROVIDER_BUDGET_RESERVATION_TTL_SECONDS=1800`
+
+The monthly ledger is shared by Haiku, Sonnet, Opus, and every other Anthropic
+bot process on the host. It reserves a conservative request cost before the
+provider call and settles from returned token and cache usage afterward,
+preventing concurrent processes from multiplying the cap. Tracking begins
+prospectively when the ledger is first deployed and resets at each UTC month
+boundary.
 
 ## Test
 
