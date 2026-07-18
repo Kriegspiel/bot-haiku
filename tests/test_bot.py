@@ -765,14 +765,23 @@ class BotTests(unittest.TestCase):
             self.assertTrue(bot.has_own_waiting_game([{"game_code": "ABC123", "created_by": "llm_haiku"}]))
             self.assertFalse(bot.has_own_waiting_game([{"game_code": "XYZ789", "created_by": "randobot"}]))
 
-    def test_anthropic_preflight_status_caches_success(self) -> None:
+    def test_anthropic_preflight_uses_free_model_metadata_and_caches_success(self) -> None:
         response = mock.Mock()
         response.raise_for_status.return_value = None
-        with mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
-            with mock.patch.object(bot.requests, "post", return_value=response) as post:
-                self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
-                self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
-        self.assertEqual(post.call_count, 1)
+        with mock.patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_MODEL": "claude-haiku-4-5-20251001"},
+            clear=False,
+        ):
+            with mock.patch.object(bot.requests, "get", return_value=response) as get:
+                with mock.patch.object(bot.requests, "post") as post:
+                    self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
+                    self.assertEqual(bot.anthropic_preflight_status(), (True, "ok"))
+
+        get.assert_called_once()
+        self.assertTrue(get.call_args.args[0].endswith("/models/claude-haiku-4-5-20251001"))
+        self.assertEqual(get.call_args.kwargs["headers"]["x-api-key"], "test-key")
+        post.assert_not_called()
 
     def test_call_anthropic_messages_uses_plain_json_by_default(self) -> None:
         response = mock.Mock()

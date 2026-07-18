@@ -13,7 +13,7 @@ Kriegspiel bot that asks an Anthropic Haiku model to choose the next action from
 - adds a stable system-prompt strategy reference so Anthropic prompt caching is above Haiku's cacheable token threshold
 - asks an Anthropic Haiku model for the top ranked next actions in compact strict JSON
 - validates the model output against the server-provided legal actions
-- checks Anthropic availability with a tiny cached preflight call before joining a new bot-vs-bot game
+- checks Anthropic availability through the non-generating model metadata endpoint before joining a new bot-vs-bot game
 - skips the join if Anthropic is unavailable or out of quota
 - still falls back safely if the model response itself is malformed
 
