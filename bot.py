@@ -23,6 +23,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -1127,18 +1128,12 @@ def anthropic_preflight_status(force: bool = False) -> tuple[bool, str]:
         return bool(_ANTHROPIC_PREFLIGHT_CACHE["ready"]), str(_ANTHROPIC_PREFLIGHT_CACHE["reason"])
 
     try:
-        response = requests.post(
-            f"{anthropic_base_url()}/messages",
+        model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
+        response = requests.get(
+            f"{anthropic_base_url()}/models/{quote(model, safe='')}",
             headers={
                 "x-api-key": os.environ["ANTHROPIC_API_KEY"].strip(),
                 "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip(),
-                "max_tokens": 1,
-                "system": "Reply with OK.",
-                "messages": [{"role": "user", "content": [{"type": "text", "text": "Ping"}]}],
             },
             timeout=anthropic_timeout_seconds(),
         )
