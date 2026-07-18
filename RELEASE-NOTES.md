@@ -5,6 +5,16 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## Shared Anthropic Monthly Cap
+
+- **Provider Cap**: enforce a shared `$18` cap per UTC calendar month across
+  Haiku, Sonnet, Opus, and every other Anthropic bot process on the host.
+- **Strict Accounting**: reserve a conservative upper-bound cost before each
+  request, settle from returned token and cache usage, and consume the full
+  reservation when usage cannot be trusted.
+- **Fallback**: stop paid Anthropic calls, report the provider unavailable, and
+  continue active games with legal local fallback moves when the cap is spent.
+
 ## Non-Billable Anthropic Availability
 
 - **Idle Cost Fix**: replace the periodic Messages API `Ping` generation with
@@ -42,8 +52,9 @@ docs-only changes do not need entries unless they affect operator workflow.
   one lightweight runner thread per active game and a configurable shared model
   call cap that defaults to 5 concurrent calls.
 - **Lobby Policy**: does not create human lobby games by default, can join a
-  compatible bot-created waiting game with 1% probability on a ten-minute scan,
-  and checks Anthropic availability before joining new bot-vs-bot games.
+  compatible bot-created waiting game using its tier probability on a
+  ten-minute scan, and checks Anthropic availability before joining new
+  bot-vs-bot games.
 - **Move Policy**: builds compact stateless prompts with a stable cacheable
   system-prompt strategy reference, asks Anthropic for ranked strict JSON
   candidate actions, and validates them before playing.

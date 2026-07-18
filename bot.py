@@ -27,6 +27,14 @@ from urllib.parse import quote
 
 import requests
 
+from provider_budget import (
+    BudgetReservation,
+    BudgetSnapshot,
+    BudgetStateError,
+    MonthlyBudgetLedger,
+    estimate_request_cost_upper_bound_usd,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_PATH = BASE_DIR / ".bot-state.json"
 DEFAULT_ENV_PATH = BASE_DIR / ".env"
@@ -50,6 +58,8 @@ DEFAULT_ANTHROPIC_CACHE_TTL = "5m"
 MIN_CACHEABLE_SYSTEM_PROMPT_WORDS = 4200
 DEFAULT_ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS = 60.0
 DEFAULT_ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS = 15.0
+DEFAULT_ANTHROPIC_MONTHLY_BUDGET_USD = 18.0
+DEFAULT_PROVIDER_BUDGET_RESERVATION_TTL_SECONDS = 1800.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
 USD_PER_MILLION_TOKENS = 1_000_000
 ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS = 1.00
@@ -137,6 +147,10 @@ _STATE_LOCK = threading.RLock()
 _MODEL_CALL_SEMAPHORE_LOCK = threading.Lock()
 _MODEL_CALL_SEMAPHORE: threading.BoundedSemaphore | None = None
 _MODEL_CALL_SEMAPHORE_LIMIT = 0
+
+
+class ProviderBudgetExhausted(RuntimeError):
+    """Raised before an Anthropic call that would exceed the monthly budget."""
 
 
 def configure_runtime_paths(*, env_path: str | Path | None = None, state_path: str | Path | None = None) -> None:
@@ -319,6 +333,44 @@ def anthropic_cache_write_1h_usd_per_million_tokens() -> float:
     )
 
 
+def anthropic_monthly_budget_usd() -> float:
+    return max(0.0, env_float("ANTHROPIC_MONTHLY_BUDGET_USD", DEFAULT_ANTHROPIC_MONTHLY_BUDGET_USD))
+
+
+def anthropic_monthly_budget_state_path() -> Path:
+    default = Path.home() / ".local" / "state" / "kriegspiel" / "provider-budgets" / "anthropic.json"
+    return Path(os.environ.get("ANTHROPIC_MONTHLY_BUDGET_STATE_PATH", str(default))).expanduser()
+
+
+def provider_budget_reservation_ttl_seconds() -> float:
+    return max(
+        60.0,
+        env_float(
+            "PROVIDER_BUDGET_RESERVATION_TTL_SECONDS",
+            DEFAULT_PROVIDER_BUDGET_RESERVATION_TTL_SECONDS,
+        ),
+    )
+
+
+def anthropic_monthly_budget_ledger() -> MonthlyBudgetLedger:
+    return MonthlyBudgetLedger(
+        anthropic_monthly_budget_state_path(),
+        limit_usd=anthropic_monthly_budget_usd(),
+        reservation_ttl_seconds=provider_budget_reservation_ttl_seconds(),
+    )
+
+
+def anthropic_monthly_budget_status() -> tuple[bool, str, BudgetSnapshot | None]:
+    try:
+        snapshot = anthropic_monthly_budget_ledger().status()
+    except (BudgetStateError, OSError, ValueError) as exc:
+        logger.error("Anthropic monthly budget is unavailable: %s", exc)
+        return False, "anthropic_monthly_budget_unavailable", None
+    if snapshot.remaining_microusd <= 0:
+        return False, "anthropic_monthly_budget_exhausted", snapshot
+    return True, "ok", snapshot
+
+
 def anthropic_usage_cost_usd(usage: dict[str, Any], *, cache_ttl: str) -> float:
     cache_write_rate = (
         anthropic_cache_write_5m_usd_per_million_tokens()
@@ -335,6 +387,78 @@ def anthropic_usage_cost_usd(usage: dict[str, Any], *, cache_ttl: str) -> float:
         + cache_read_tokens * anthropic_cache_read_input_usd_per_million_tokens()
         + cache_write_tokens * cache_write_rate
     ) / USD_PER_MILLION_TOKENS
+
+
+def anthropic_usage_has_billable_tokens(payload: dict[str, Any]) -> bool:
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    return any(
+        usage_token_count(usage, key) > 0
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        )
+    )
+
+
+def reserve_anthropic_request(
+    payload: dict[str, Any],
+    *,
+    cache_ttl: str,
+) -> tuple[MonthlyBudgetLedger, BudgetReservation, str]:
+    input_rate = max(
+        anthropic_input_usd_per_million_tokens(),
+        anthropic_cache_read_input_usd_per_million_tokens(),
+        anthropic_cache_write_5m_usd_per_million_tokens(),
+        anthropic_cache_write_1h_usd_per_million_tokens(),
+    )
+    if input_rate <= 0 and anthropic_output_usd_per_million_tokens() <= 0:
+        raise ProviderBudgetExhausted("anthropic_monthly_budget_pricing_unavailable")
+
+    maximum_cost_usd = estimate_request_cost_upper_bound_usd(
+        payload,
+        input_usd_per_million_tokens=input_rate,
+        output_usd_per_million_tokens=anthropic_output_usd_per_million_tokens(),
+        maximum_output_tokens=int(payload.get("max_tokens") or anthropic_max_output_tokens()),
+    )
+    ledger = anthropic_monthly_budget_ledger()
+    try:
+        reservation = ledger.reserve(maximum_cost_usd)
+    except (BudgetStateError, OSError, ValueError) as exc:
+        logger.error("Anthropic monthly budget reservation failed: %s", exc)
+        raise ProviderBudgetExhausted("anthropic_monthly_budget_unavailable") from exc
+    if reservation is None:
+        raise ProviderBudgetExhausted("anthropic_monthly_budget_exhausted")
+    return ledger, reservation, cache_ttl
+
+
+def settle_anthropic_request(
+    budget: tuple[MonthlyBudgetLedger, BudgetReservation, str],
+    payload: dict[str, Any] | None,
+) -> BudgetSnapshot | None:
+    ledger, reservation, cache_ttl = budget
+    actual_cost_usd = None
+    if payload is not None and anthropic_usage_has_billable_tokens(payload):
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        actual_cost_usd = anthropic_usage_cost_usd(usage, cache_ttl=cache_ttl)
+    try:
+        snapshot = ledger.settle(reservation, actual_cost_usd)
+    except (BudgetStateError, OSError, ValueError) as exc:
+        logger.error("Anthropic monthly budget settlement failed: %s", exc)
+        return None
+    if actual_cost_usd is None:
+        logger.warning(
+            "Anthropic response cost was unknown; charged reserved budget $%.6f",
+            reservation.amount_microusd / USD_PER_MILLION_TOKENS,
+        )
+    if snapshot.spent_microusd > snapshot.limit_microusd:
+        logger.error(
+            "Anthropic monthly budget exceeded during settlement: spent=$%.6f limit=$%.6f",
+            snapshot.spent_usd,
+            snapshot.limit_usd,
+        )
+    return snapshot
 
 
 def log_anthropic_usage(*, game_id: str, model: str, payload: dict[str, Any]) -> None:
@@ -1127,6 +1251,14 @@ def anthropic_preflight_status(force: bool = False) -> tuple[bool, str]:
     if not force and _ANTHROPIC_PREFLIGHT_CACHE["ready"] is not None and now < float(_ANTHROPIC_PREFLIGHT_CACHE["expires_at"]):
         return bool(_ANTHROPIC_PREFLIGHT_CACHE["ready"]), str(_ANTHROPIC_PREFLIGHT_CACHE["reason"])
 
+    budget_ready, budget_reason, _snapshot = anthropic_monthly_budget_status()
+    if not budget_ready:
+        return cache_anthropic_preflight(
+            False,
+            reason=budget_reason,
+            ttl_seconds=anthropic_preflight_failure_ttl_seconds(),
+        )
+
     try:
         model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
         response = requests.get(
@@ -1146,14 +1278,53 @@ def anthropic_preflight_status(force: bool = False) -> tuple[bool, str]:
     return cache_anthropic_preflight(True, reason="ok", ttl_seconds=anthropic_preflight_success_ttl_seconds())
 
 
+def mark_anthropic_budget_unavailable(reason: str) -> None:
+    cache_anthropic_preflight(False, reason=reason, ttl_seconds=anthropic_preflight_failure_ttl_seconds())
+    report_model_availability(False, reason, force=True)
+
+
+def post_anthropic_request(payload: dict[str, Any], *, cache_ttl: str) -> dict[str, Any]:
+    try:
+        budget = reserve_anthropic_request(payload, cache_ttl=cache_ttl)
+    except ProviderBudgetExhausted as exc:
+        mark_anthropic_budget_unavailable(str(exc))
+        raise
+
+    api_key = os.environ["ANTHROPIC_API_KEY"].strip()
+    try:
+        with model_call_semaphore():
+            response = requests.post(
+                f"{anthropic_base_url()}/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+                timeout=anthropic_timeout_seconds(),
+            )
+        response.raise_for_status()
+        response_payload = response.json()
+        if not isinstance(response_payload, dict):
+            raise ValueError("provider response payload must be an object")
+    except Exception:
+        settle_anthropic_request(budget, None)
+        raise
+
+    snapshot = settle_anthropic_request(budget, response_payload)
+    if snapshot is not None and snapshot.remaining_microusd <= 0:
+        mark_anthropic_budget_unavailable("anthropic_monthly_budget_exhausted")
+    return response_payload
+
+
 def call_anthropic_messages(
     *,
     system_prompt: str,
     messages: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    api_key = os.environ["ANTHROPIC_API_KEY"].strip()
     model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
-    cache_control = {"type": "ephemeral", "ttl": anthropic_cache_ttl()}
+    cache_ttl = anthropic_cache_ttl()
+    cache_control = {"type": "ephemeral", "ttl": cache_ttl}
     payload: dict[str, Any] = {
         "model": model,
         "max_tokens": anthropic_max_output_tokens(),
@@ -1169,19 +1340,7 @@ def call_anthropic_messages(
     if anthropic_use_tools():
         payload["tools"] = [action_tool()]
         payload["tool_choice"] = {"type": "tool", "name": ACTION_SCHEMA_NAME}
-    with model_call_semaphore():
-        response = requests.post(
-            f"{anthropic_base_url()}/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=payload,
-            timeout=anthropic_timeout_seconds(),
-        )
-    response.raise_for_status()
-    return response.json()
+    return post_anthropic_request(payload, cache_ttl=cache_ttl)
 
 
 def extract_tool_input(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1360,6 +1519,8 @@ def choose_ranked_actions(
         decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
         if decisions:
             return decisions, "model", None
+    except ProviderBudgetExhausted as exc:
+        logger.warning("model selection skipped: %s", exc)
     except requests.RequestException as exc:
         reason = describe_http_error(exc)
         logger.warning("model selection failed: %s", reason)
