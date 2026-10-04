@@ -127,7 +127,7 @@ Anthropic prompting defaults:
 - user prompt is stateless, uses compact keys, and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
 - Anthropic prompt caching is enabled with a 5-minute TTL by default, with an explicit cache marker on the stable system prompt; set `ANTHROPIC_CACHE_TTL=1h` only when requests may be spaced more than 5 minutes apart
 - verify prompt caching through `cache_creation_input_tokens` on the first matching request and `cache_read_input_tokens` on later matching requests
-- Anthropic tool use is disabled by default; set `ANTHROPIC_USE_TOOLS=true` to request strict action tool output. Haiku uses forced tool choice; Sonnet 5.5 and Opus 5.5 use `auto` because forced tools are rejected
+- Anthropic tool use is disabled by default; set `ANTHROPIC_USE_TOOLS=true` to request strict action tool output. Thinking-enabled models use `auto` tool choice with strict JSON output as a fallback, because forced tools are rejected. Haiku without thinking retains forced tool choice
 - the bot asks for the top 10 ranked candidate actions by default
 - if a batch fails, it asks the model for the next batch of compact move candidates
 - defaults can be tuned with:
@@ -162,3 +162,23 @@ python -m unittest discover -s tests
 ## systemd
 
 A production host can run the bot as a service with `deploy/kriegspiel-haiku-bot.service`.
+
+
+The active templates enable maximum supported reasoning. Sonnet and Opus 5.5
+use adaptive thinking with `ANTHROPIC_EFFORT=max`. Haiku 4.5 has no effort
+parameter; its template enables manual extended thinking with
+`ANTHROPIC_THINKING_BUDGET_TOKENS=16384`. Manual budgets must be at least 1024
+and strictly below `ANTHROPIC_MAX_OUTPUT_TOKENS`; adaptive models reject manual
+budgets. Each template caps thinking plus action output at 32768 tokens and
+allows 300 seconds for a request. This cap bounds spending even at maximum
+effort; Anthropic recommends larger caps for difficult maximum-effort workloads.
+Responses that exhaust their token cap are rejected before selecting an action.
+The shared $18 monthly Anthropic ledger remains unchanged.
+
+See Anthropic's [effort controls](https://platform.claude.com/docs/en/build-with-claude/effort)
+and [manual extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+for model support and token-budget constraints.
+
+Stable Sonnet and Opus usernames are `llm_sonnet` and `llm_opus`; deployment
+renames the existing accounts without changing their IDs, histories, instance
+filenames, state files, or service names.
