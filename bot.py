@@ -1214,6 +1214,16 @@ def anthropic_effort() -> str:
     return raw if raw in {"low", "medium", "high", "xhigh", "max"} else "low"
 
 
+def anthropic_thinking_budget_tokens() -> int:
+    raw = os.environ.get("ANTHROPIC_THINKING_BUDGET_TOKENS", "").strip()
+    if not raw:
+        return 0
+    tokens = int(raw)
+    if tokens < 1024 or tokens >= anthropic_max_output_tokens():
+        raise ValueError("Anthropic thinking budget must be at least 1024 and below max output tokens")
+    return tokens
+
+
 def cache_anthropic_preflight(ready: bool, *, reason: str, ttl_seconds: float) -> tuple[bool, str]:
     _ANTHROPIC_PREFLIGHT_CACHE["ready"] = ready
     _ANTHROPIC_PREFLIGHT_CACHE["reason"] = reason
@@ -1343,6 +1353,12 @@ def call_anthropic_messages(
         "messages": messages,
     }
     adaptive_model = model in {"claude-sonnet-5-5", "claude-opus-5-5"}
+    manual_budget = anthropic_thinking_budget_tokens()
+    if manual_budget and adaptive_model:
+        raise ValueError("Adaptive models use effort instead of a manual thinking budget")
+    if manual_budget:
+        payload["thinking"] = {"type": "enabled", "budget_tokens": manual_budget}
+        payload["output_config"] = {"format": {"type": "json_schema", "schema": action_schema()["schema"]}}
     if adaptive_model:
         # Thinking consumes max_tokens on these models. Keep a hard per-call
         # bound and leave accounting to the existing shared provider ledger.
@@ -1353,7 +1369,7 @@ def call_anthropic_messages(
         }
     if anthropic_use_tools():
         payload["tools"] = [action_tool()]
-        if adaptive_model:
+        if adaptive_model or manual_budget:
             # Forced tool choice is rejected by Sonnet and Opus 5.5. The text
             # schema also gives a valid action if auto chooses a text response.
             payload["tool_choice"] = {"type": "auto"}
@@ -1413,6 +1429,8 @@ def decode_first_json_object(text: str) -> dict[str, Any]:
 
 
 def parse_model_decision(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("stop_reason") in {"max_tokens", "model_context_window_exceeded"}:
+        raise ValueError("Anthropic response exhausted its token limit")
     tool_input = extract_tool_input(payload)
     if tool_input is not None:
         return tool_input
