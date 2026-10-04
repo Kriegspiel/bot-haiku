@@ -894,6 +894,7 @@ class BotTests(unittest.TestCase):
         for instance, model, max_tokens in (
             ("sonnet5", "claude-sonnet-5-5", 32768),
             ("opus48", "claude-opus-5-5", 32768),
+            ("fable", "claude-fable-5-1", 32768),
         ):
             for response_block in (
                 {"type": "tool_use", "name": bot.ACTION_SCHEMA_NAME, "input": {"m": ["e2e4", "ask_any"]}},
@@ -928,15 +929,17 @@ class BotTests(unittest.TestCase):
                     ])
 
     def test_upgraded_model_uses_structured_json_when_tools_disabled(self) -> None:
-        env = {"ANTHROPIC_MODEL": "claude-opus-5-5", "ANTHROPIC_USE_TOOLS": "false", "ANTHROPIC_EFFORT": "medium"}
-        with mock.patch.dict("os.environ", env, clear=True):
-            with mock.patch.object(bot, "post_anthropic_request", return_value={}) as post:
-                bot.call_anthropic_messages(system_prompt="system", messages=[])
-        payload = post.call_args.args[0]
-        self.assertEqual(payload["output_config"]["effort"], "medium")
-        self.assertEqual(payload["output_config"]["format"]["schema"], bot.action_schema()["schema"])
-        self.assertNotIn("tools", payload)
-        self.assertNotIn("tool_choice", payload)
+        for model in ("claude-opus-5-5", "claude-fable-5-1"):
+            env = {"ANTHROPIC_MODEL": model, "ANTHROPIC_USE_TOOLS": "false", "ANTHROPIC_EFFORT": "max"}
+            with self.subTest(model=model), mock.patch.dict("os.environ", env, clear=True):
+                with mock.patch.object(bot, "post_anthropic_request", return_value={}) as post:
+                    bot.call_anthropic_messages(system_prompt="system", messages=[])
+                payload = post.call_args.args[0]
+                self.assertEqual(payload["thinking"], {"type": "adaptive"})
+                self.assertEqual(payload["output_config"]["effort"], "max")
+                self.assertEqual(payload["output_config"]["format"]["schema"], bot.action_schema()["schema"])
+                self.assertNotIn("tools", payload)
+                self.assertNotIn("tool_choice", payload)
 
     def test_report_model_availability_posts_status_and_throttles_repeats(self) -> None:
         with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
@@ -1084,12 +1087,29 @@ class BotTests(unittest.TestCase):
                 self.assertEqual(bot.normalize_ranked_decisions(bot.parse_model_decision(result), {"possible_actions": ["move"], "allowed_moves": ["e2e4"]}), [{"action": "move", "uci": "e2e4"}])
 
     def test_manual_thinking_budget_validation_precedes_request(self) -> None:
-        for model, budget in (("claude-haiku-4-5-20251001", "0"), ("claude-haiku-4-5-20251001", "32768"), ("claude-opus-5-5", "16384")):
+        for model, budget in (("claude-haiku-4-5-20251001", "0"), ("claude-haiku-4-5-20251001", "32768"), ("claude-opus-5-5", "16384"), ("claude-fable-5-1", "16384")):
             env = {"ANTHROPIC_MODEL": model, "ANTHROPIC_THINKING_BUDGET_TOKENS": budget, "ANTHROPIC_MAX_OUTPUT_TOKENS": "32768"}
             with self.subTest(model=model, budget=budget), mock.patch.dict(os.environ, env, clear=True):
                 with mock.patch.object(bot, "post_anthropic_request") as post, self.assertRaises(ValueError):
                     bot.call_anthropic_messages(system_prompt="system", messages=[])
                 post.assert_not_called()
+
+    def test_fable_template_rates_timeout_and_shared_budget(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            bot.load_env_file(bot.BASE_DIR / "instances/fable.env.example")
+            self.assertEqual(os.environ["KRIEGSPIEL_BOT_USERNAME"], "llm_fable")
+            self.assertEqual(os.environ["KRIEGSPIEL_LLM_BOT_TIER"], "T5")
+            self.assertEqual(os.environ["ANTHROPIC_MONTHLY_BUDGET_USD"], "18")
+            self.assertEqual(os.environ["ANTHROPIC_TIMEOUT_SECONDS"], "600")
+            self.assertEqual(bot.anthropic_max_output_tokens(), 32768)
+            self.assertEqual(bot.anthropic_thinking_budget_tokens(), 0)
+            usage = {
+                "input_tokens": 1000, "output_tokens": 200,
+                "cache_read_input_tokens": 2000,
+                "cache_creation_input_tokens": 100,
+            }
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.02175)
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.0225)
 
     def test_truncated_anthropic_actions_are_rejected(self) -> None:
         for reason in ("max_tokens", "model_context_window_exceeded"):

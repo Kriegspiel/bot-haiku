@@ -1352,7 +1352,7 @@ def call_anthropic_messages(
         ],
         "messages": messages,
     }
-    adaptive_model = model in {"claude-sonnet-5-5", "claude-opus-5-5"}
+    adaptive_model = model in {"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"}
     manual_budget = anthropic_thinking_budget_tokens()
     if manual_budget and adaptive_model:
         raise ValueError("Adaptive models use effort instead of a manual thinking budget")
@@ -1370,7 +1370,7 @@ def call_anthropic_messages(
     if anthropic_use_tools():
         payload["tools"] = [action_tool()]
         if adaptive_model or manual_budget:
-            # Forced tool choice is rejected by Sonnet and Opus 5.5. The text
+            # Forced tool choice is rejected by Sonnet/Opus 5.5 and Fable 5.1. The text
             # schema also gives a valid action if auto chooses a text response.
             payload["tool_choice"] = {"type": "auto"}
             payload["system"][0]["text"] += f"\nUse the {ACTION_SCHEMA_NAME} tool to return your ranked actions."
