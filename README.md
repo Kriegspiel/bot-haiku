@@ -55,20 +55,22 @@ Each instance env must have its own Kriegspiel bot identity and
 `ANTHROPIC_MODEL`. `ks-deploy bot-instance-bootstrap bot-haiku ...` renders this
 shape for production instances.
 
-Checked-in T3/T4 templates live under `instances/` with `.env.example` suffixes.
+Checked-in T3/T4/T5 templates live under `instances/` with `.env.example` suffixes.
 Copy one to `.env`, fill in secrets, and use the matching state file when
 running or registering that instance.
 
-Current templates retain their instance paths and bot usernames so existing
-profiles, ratings, and completed games remain associated with the same account:
+Existing Sonnet and Opus instances retain their paths and usernames so profiles,
+ratings and completed games remain associated with the same account. Fable uses
+a new stable identity:
 
 | Instance | Display name | Model | Tier | Total output token cap |
 |---|---|---|---|---|
-| `sonnet5` | Claude Sonnet | `claude-sonnet-5-5` | T3 | 4096 |
-| `opus48` | Claude Opus | `claude-opus-5-5` | T4 | 8192 |
+| `sonnet5` | Claude Sonnet | `claude-sonnet-5-5` | T3 | 32768 |
+| `opus48` | Claude Opus | `claude-opus-5-5` | T4 | 32768 |
+| `fable` | Claude Fable | `claude-fable-5-1` | T5 | 32768 |
 
-For these two models the runtime sends adaptive thinking, with
-`ANTHROPIC_EFFORT=low` by default, and a compact structured JSON output schema.
+For these three models the templates select adaptive thinking with
+`ANTHROPIC_EFFORT=max`, and a compact structured JSON output schema.
 When tools are enabled it uses automatic strict tool choice and instructs the
 model to call the action tool. A structured text response is also accepted.
 Thinking and action output share the configured `ANTHROPIC_MAX_OUTPUT_TOKENS`
@@ -164,14 +166,14 @@ python -m unittest discover -s tests
 A production host can run the bot as a service with `deploy/kriegspiel-haiku-bot.service`.
 
 
-The active templates enable maximum supported reasoning. Sonnet and Opus 5.5
-use adaptive thinking with `ANTHROPIC_EFFORT=max`. Haiku 4.5 has no effort
+The active templates enable maximum supported reasoning. Sonnet/Opus 5.5 and
+Fable 5.1 use adaptive thinking with `ANTHROPIC_EFFORT=max`. Haiku 4.5 has no effort
 parameter; its template enables manual extended thinking with
 `ANTHROPIC_THINKING_BUDGET_TOKENS=16384`. Manual budgets must be at least 1024
 and strictly below `ANTHROPIC_MAX_OUTPUT_TOKENS`; adaptive models reject manual
 budgets. Each template caps thinking plus action output at 32768 tokens and
-allows 300 seconds for a request. This cap bounds spending even at maximum
-effort; Anthropic recommends larger caps for difficult maximum-effort workloads.
+allows 300 seconds for a request (600 for Fable). This cap bounds spending even
+at maximum effort; Anthropic recommends larger caps for difficult maximum-effort workloads.
 Responses that exhaust their token cap are rejected before selecting an action.
 The shared $18 monthly Anthropic ledger remains unchanged.
 
@@ -182,3 +184,14 @@ for model support and token-budget constraints.
 Stable Sonnet and Opus usernames are `llm_sonnet` and `llm_opus`; deployment
 renames the existing accounts without changing their IDs, histories, instance
 filenames, state files, or service names.
+
+Claude Fable's T5 template uses direct Anthropic Messages, stable username
+`llm_fable`, always-on adaptive thinking and maximum effort. Forced tool choice
+is rejected, so the runtime uses automatic strict action tools with structured
+JSON text as a fallback. Its input/cache-read/output rates are $10/$0.25/$50
+per million tokens; cache writes cost $12.50 for five minutes or $20 for one hour.
+The total 32768-token output cap includes thinking and action output, and shares
+the existing $18 monthly Anthropic ledger. Fable is slower than Opus/Sonnet, so
+its bounded timeout is 600 seconds. No thinking blocks are replayed across game
+turns. See the official [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview)
+and [migration requirements](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
