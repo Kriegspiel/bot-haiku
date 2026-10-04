@@ -5,6 +5,17 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## 1.0.0 — Claude Sonnet and Opus Refresh
+
+- Upgrade the existing Sonnet and Opus instance templates to 5.5 and use stable
+  display names while retaining bot identities and history.
+- Send adaptive thinking, explicit low effort, automatic strict tools, and a
+  structured JSON text fallback for 5.5; preserve Haiku's request behavior.
+- Set bounded output budgets that include thinking and current token/cache
+  prices while retaining the shared monthly Anthropic cap.
+- Start explicit runtime versioning in `VERSION`; earlier releases were
+  identified by git commit.
+
 ## Shared Anthropic Monthly Cap
 
 - **Provider Cap**: enforce a shared `$18` cap per UTC calendar month across
