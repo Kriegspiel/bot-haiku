@@ -1209,6 +1209,11 @@ def anthropic_use_tools() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def anthropic_effort() -> str:
+    raw = os.environ.get("ANTHROPIC_EFFORT", "low").strip().lower()
+    return raw if raw in {"low", "medium", "high", "xhigh", "max"} else "low"
+
+
 def cache_anthropic_preflight(ready: bool, *, reason: str, ttl_seconds: float) -> tuple[bool, str]:
     _ANTHROPIC_PREFLIGHT_CACHE["ready"] = ready
     _ANTHROPIC_PREFLIGHT_CACHE["reason"] = reason
@@ -1337,9 +1342,24 @@ def call_anthropic_messages(
         ],
         "messages": messages,
     }
+    adaptive_model = model in {"claude-sonnet-5-5", "claude-opus-5-5"}
+    if adaptive_model:
+        # Thinking consumes max_tokens on these models. Keep a hard per-call
+        # bound and leave accounting to the existing shared provider ledger.
+        payload["thinking"] = {"type": "adaptive"}
+        payload["output_config"] = {
+            "effort": anthropic_effort(),
+            "format": {"type": "json_schema", "schema": action_schema()["schema"]},
+        }
     if anthropic_use_tools():
         payload["tools"] = [action_tool()]
-        payload["tool_choice"] = {"type": "tool", "name": ACTION_SCHEMA_NAME}
+        if adaptive_model:
+            # Forced tool choice is rejected by Sonnet and Opus 5.5. The text
+            # schema also gives a valid action if auto chooses a text response.
+            payload["tool_choice"] = {"type": "auto"}
+            payload["system"][0]["text"] += f"\nUse the {ACTION_SCHEMA_NAME} tool to return your ranked actions."
+        else:
+            payload["tool_choice"] = {"type": "tool", "name": ACTION_SCHEMA_NAME}
     return post_anthropic_request(payload, cache_ttl=cache_ttl)
 
 

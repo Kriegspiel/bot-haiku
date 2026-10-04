@@ -889,6 +889,55 @@ class BotTests(unittest.TestCase):
         self.assertTrue(payload["tools"][0]["strict"])
         self.assertEqual(payload["messages"], messages)
 
+    def test_upgraded_instances_use_adaptive_auto_tools_and_return_legal_actions(self) -> None:
+        state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
+        for instance, model, max_tokens in (
+            ("sonnet5", "claude-sonnet-5-5", 4096),
+            ("opus48", "claude-opus-5-5", 8192),
+        ):
+            for response_block in (
+                {"type": "tool_use", "name": bot.ACTION_SCHEMA_NAME, "input": {"m": ["e2e4", "ask_any"]}},
+                {"type": "text", "text": '{"m":["e2e4","ask_any"]}'},
+            ):
+                with self.subTest(instance=instance, response_type=response_block["type"]):
+                    response = mock.Mock()
+                    response.raise_for_status.return_value = None
+                    response.json.return_value = {
+                        "content": [{"type": "thinking", "thinking": "", "signature": "sig"}, response_block],
+                        "usage": {"input_tokens": 100, "output_tokens": 100},
+                    }
+                    with mock.patch.dict("os.environ", {}, clear=True):
+                        bot.load_env_file(bot.BASE_DIR / "instances" / f"{instance}.env.example")
+                        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+                        with mock.patch.object(bot, "reserve_anthropic_request", return_value=None):
+                            with mock.patch.object(bot, "settle_anthropic_request", return_value=None):
+                                with mock.patch.object(bot.requests, "post", return_value=response) as post:
+                                    result = bot.call_anthropic_messages(system_prompt="system", messages=[{"role": "user", "content": "turn"}])
+                    payload = post.call_args.kwargs["json"]
+                    self.assertEqual(payload["model"], model)
+                    self.assertEqual(payload["max_tokens"], max_tokens)
+                    self.assertEqual(payload["thinking"], {"type": "adaptive"})
+                    self.assertEqual(payload["output_config"]["effort"], "low")
+                    self.assertEqual(payload["tool_choice"], {"type": "auto"})
+                    self.assertTrue(payload["tools"][0]["strict"])
+                    self.assertFalse(payload["output_config"]["format"]["schema"]["additionalProperties"])
+                    self.assertEqual(payload["output_config"]["format"]["schema"]["properties"]["m"]["minItems"], 1)
+                    self.assertNotIn("temperature", payload)
+                    self.assertEqual(bot.normalize_ranked_decisions(bot.parse_model_decision(result), state), [
+                        {"action": "move", "uci": "e2e4"}, {"action": "ask_any", "uci": None},
+                    ])
+
+    def test_upgraded_model_uses_structured_json_when_tools_disabled(self) -> None:
+        env = {"ANTHROPIC_MODEL": "claude-opus-5-5", "ANTHROPIC_USE_TOOLS": "false", "ANTHROPIC_EFFORT": "medium"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            with mock.patch.object(bot, "post_anthropic_request", return_value={}) as post:
+                bot.call_anthropic_messages(system_prompt="system", messages=[])
+        payload = post.call_args.args[0]
+        self.assertEqual(payload["output_config"]["effort"], "medium")
+        self.assertEqual(payload["output_config"]["format"]["schema"], bot.action_schema()["schema"])
+        self.assertNotIn("tools", payload)
+        self.assertNotIn("tool_choice", payload)
+
     def test_report_model_availability_posts_status_and_throttles_repeats(self) -> None:
         with mock.patch.object(bot, "post_json", return_value={"ok": True}) as post_json:
             self.assertTrue(bot.report_model_availability(False, "http_400: usage_limit"))
