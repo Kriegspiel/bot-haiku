@@ -5,6 +5,10 @@ current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
 docs-only changes do not need entries unless they affect operator workflow.
 
+## 1.0.3 — Xhigh Claude Reasoning
+
+- Set active Sonnet, Opus, and Fable templates to xhigh adaptive effort. Keep Haiku manual thinking, token caps, timeouts, and the shared monthly budget unchanged.
+
 ## 1.0.0 — Claude Sonnet and Opus Refresh
 
 - Upgrade the existing Sonnet and Opus instance templates to 5.5 and use stable

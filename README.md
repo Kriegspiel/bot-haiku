@@ -70,7 +70,7 @@ a new stable identity:
 | `fable` | Claude Fable | `claude-fable-5-1` | T5 | 32768 |
 
 For these three models the templates select adaptive thinking with
-`ANTHROPIC_EFFORT=max`, and a compact structured JSON output schema.
+`ANTHROPIC_EFFORT=xhigh`, and a compact structured JSON output schema.
 When tools are enabled it uses automatic strict tool choice and instructs the
 model to call the action tool. A structured text response is also accepted.
 Thinking and action output share the configured `ANTHROPIC_MAX_OUTPUT_TOKENS`
@@ -166,8 +166,8 @@ python -m unittest discover -s tests
 A production host can run the bot as a service with `deploy/kriegspiel-haiku-bot.service`.
 
 
-The active templates enable maximum supported reasoning. Sonnet/Opus 5.5 and
-Fable 5.1 use adaptive thinking with `ANTHROPIC_EFFORT=max`. Haiku 4.5 has no effort
+The active templates enable the requested xhigh reasoning. Sonnet/Opus 5.5 and
+Fable 5.1 use adaptive thinking with `ANTHROPIC_EFFORT=xhigh`. Haiku 4.5 has no effort
 parameter; its template enables manual extended thinking with
 `ANTHROPIC_THINKING_BUDGET_TOKENS=16384`. Manual budgets must be at least 1024
 and strictly below `ANTHROPIC_MAX_OUTPUT_TOKENS`; adaptive models reject manual
@@ -186,7 +186,7 @@ renames the existing accounts without changing their IDs, histories, instance
 filenames, state files, or service names.
 
 Claude Fable's T5 template uses direct Anthropic Messages, stable username
-`llm_fable`, always-on adaptive thinking and maximum effort. Forced tool choice
+`llm_fable`, always-on adaptive thinking and xhigh effort. Forced tool choice
 is rejected, so the runtime uses automatic strict action tools with structured
 JSON text as a fallback. Its input/cache-read/output rates are $10/$0.25/$50
 per million tokens; cache writes cost $12.50 for five minutes or $20 for one hour.
