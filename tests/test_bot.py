@@ -918,7 +918,7 @@ class BotTests(unittest.TestCase):
                     self.assertEqual(payload["model"], model)
                     self.assertEqual(payload["max_tokens"], max_tokens)
                     self.assertEqual(payload["thinking"], {"type": "adaptive"})
-                    self.assertEqual(payload["output_config"]["effort"], "max")
+                    self.assertEqual(payload["output_config"]["effort"], "xhigh")
                     self.assertEqual(payload["tool_choice"], {"type": "auto"})
                     self.assertTrue(payload["tools"][0]["strict"])
                     self.assertFalse(payload["output_config"]["format"]["schema"]["additionalProperties"])
