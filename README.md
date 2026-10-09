@@ -129,21 +129,21 @@ Anthropic prompting defaults:
 - user prompt is stateless, uses compact keys, and carries private FEN, ruleset-specific public material/reserves, at least the last 10 scorecard turns when available, legal actions, and retry feedback
 - Anthropic prompt caching is enabled with a 5-minute TTL by default, with an explicit cache marker on the stable system prompt; set `ANTHROPIC_CACHE_TTL=1h` only when requests may be spaced more than 5 minutes apart
 - verify prompt caching through `cache_creation_input_tokens` on the first matching request and `cache_read_input_tokens` on later matching requests
-- Anthropic tool use is disabled by default; set `ANTHROPIC_USE_TOOLS=true` to request strict action tool output. Thinking-enabled models use `auto` tool choice with strict JSON output as a fallback, because forced tools are rejected. Haiku without thinking retains forced tool choice
+- Anthropic tool use is disabled by default; set `ANTHROPIC_USE_TOOLS=true` to request strict action tool output. Thinking-enabled models use `auto` tool choice with strict JSON output as a fallback, because forced tools are rejected. Legacy Haiku 4.5 without thinking retains forced tool choice
 - the bot asks for the top 10 ranked candidate actions by default
 - if a batch fails, it asks the model for the next batch of compact move candidates
 - defaults can be tuned with:
-  - `ANTHROPIC_MODEL=claude-haiku-4-5-20251001`
+  - `ANTHROPIC_MODEL=claude-haiku-5-5`
   - `ANTHROPIC_MODEL_BATCH_SIZE=10`
   - `ANTHROPIC_MAX_BATCHES_PER_TURN=5`
   - `ANTHROPIC_MAX_PROMPT_TURNS=10` (values below 10 are clamped to 10)
   - `ANTHROPIC_PREFLIGHT_SUCCESS_TTL_SECONDS=60`
   - `ANTHROPIC_PREFLIGHT_FAILURE_TTL_SECONDS=15`
-  - `ANTHROPIC_INPUT_USD_PER_MILLION_TOKENS=1.00`
-  - `ANTHROPIC_OUTPUT_USD_PER_MILLION_TOKENS=5.00`
-  - `ANTHROPIC_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS=0.10`
-  - `ANTHROPIC_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS=1.25`
-  - `ANTHROPIC_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS=2.00`
+  - `ANTHROPIC_INPUT_USD_PER_MILLION_TOKENS=0.10`
+  - `ANTHROPIC_OUTPUT_USD_PER_MILLION_TOKENS=0.50`
+  - `ANTHROPIC_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS=0.01`
+  - `ANTHROPIC_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS=0.125`
+  - `ANTHROPIC_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS=0.20`
   - `ANTHROPIC_MONTHLY_BUDGET_USD=18`
   - `ANTHROPIC_MONTHLY_BUDGET_STATE_PATH=~/.local/state/kriegspiel/provider-budgets/anthropic.json`
   - `PROVIDER_BUDGET_RESERVATION_TTL_SECONDS=1800`
@@ -167,9 +167,8 @@ A production host can run the bot as a service with `deploy/kriegspiel-haiku-bot
 
 
 The active templates enable the requested xhigh reasoning. Sonnet/Opus 5.5 and
-Fable 5.1 use adaptive thinking with `ANTHROPIC_EFFORT=xhigh`. Haiku 4.5 has no effort
-parameter; its template enables manual extended thinking with
-`ANTHROPIC_THINKING_BUDGET_TOKENS=16384`. Manual budgets must be at least 1024
+Fable 5.1 and Haiku 5.5 use adaptive thinking with `ANTHROPIC_EFFORT=xhigh`.
+Legacy Haiku 4.5 accepts `ANTHROPIC_THINKING_BUDGET_TOKENS=16384`. Manual budgets must be at least 1024
 and strictly below `ANTHROPIC_MAX_OUTPUT_TOKENS`; adaptive models reject manual
 budgets. Each template caps thinking plus action output at 32768 tokens and
 allows 300 seconds for a request (600 for Fable). This cap bounds spending even
@@ -195,3 +194,5 @@ the existing $18 monthly Anthropic ledger. Fable is slower than Opus/Sonnet, so
 its bounded timeout is 600 seconds. No thinking blocks are replayed across game
 turns. See the official [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview)
 and [migration requirements](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
+
+Haiku 5.5 pricing above is for up to 100,000 total prompt tokens, including cache reads/writes. Longer prompts cost five times those rates. Reservations always use that higher tier; returned usage determines settlement.

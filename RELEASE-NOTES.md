@@ -20,6 +20,12 @@ docs-only changes do not need entries unless they affect operator workflow.
 - Start explicit runtime versioning in `VERSION`; earlier releases were
   identified by git commit.
 
+## 1.0.4 — Claude Haiku 5.5
+
+- Upgrade the base worker to `claude-haiku-5-5` with adaptive thinking at `xhigh`, the level below `max`, automatic strict action tools and JSON fallback.
+- Estimate short-prompt input/output at $0.10/$0.50 per million tokens; apply the fivefold tier above 100,000 total prompt tokens, including cached tokens. Reserve conservatively at the higher tier within the unchanged shared $18 monthly cap.
+- Keep the existing 32,768-token output bound and 300-second timeout.
+
 ## Shared Anthropic Monthly Cap
 
 - **Provider Cap**: enforce a shared `$18` cap per UTC calendar month across
