@@ -526,8 +526,25 @@ class BotTests(unittest.TestCase):
             "cache_creation_input_tokens": 200,
         }
 
-        self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.00155)
-        self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.0014)
+        self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.000155)
+        self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.00014)
+
+    def test_haiku55_pricing_threshold_counts_cached_prompt_tokens(self) -> None:
+        with mock.patch.dict(os.environ, {"ANTHROPIC_MODEL": "claude-haiku-5-5"}, clear=True):
+            usage = {"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 98_800, "cache_creation_input_tokens": 200}
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.001213)
+            usage["cache_read_input_tokens"] += 1
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="5m"), 0.00606505)
+            self.assertAlmostEqual(bot.anthropic_usage_cost_usd(usage, cache_ttl="1h"), 0.00614005)
+
+    def test_haiku55_reserves_long_prompt_rates_before_request(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(bot, "anthropic_monthly_budget_ledger") as ledger:
+            ledger.return_value.reserve.return_value = mock.sentinel.reservation
+            with mock.patch.object(bot, "estimate_request_cost_upper_bound_usd", return_value=0.10) as estimate:
+                bot.reserve_anthropic_request({"model": "claude-haiku-5-5", "max_tokens": 32768}, cache_ttl="5m")
+            self.assertEqual(estimate.call_args.kwargs["input_usd_per_million_tokens"], 1.0)
+            self.assertEqual(estimate.call_args.kwargs["output_usd_per_million_tokens"], 2.5)
+            ledger.return_value.reserve.assert_called_once_with(0.10)
 
     def test_anthropic_usage_cost_usd_reads_pricing_env(self) -> None:
         usage = {
@@ -658,7 +675,7 @@ class BotTests(unittest.TestCase):
         self.assertIn("output_tokens=20", log_output)
         self.assertIn("cache_read_input_tokens=500", log_output)
         self.assertIn("cache_creation_input_tokens=200", log_output)
-        self.assertIn("cost_usd=0.001550", log_output)
+        self.assertIn("cost_usd=0.000155", log_output)
 
     def test_choose_bot_game_to_join_returns_candidate(self) -> None:
         games = [{"game_code": "BOT123", "created_by": "randobot", "rule_variant": "berkeley_any"}]
@@ -875,7 +892,7 @@ class BotTests(unittest.TestCase):
         response.json.return_value = {"content": []}
         messages = [{"role": "user", "content": [{"type": "text", "text": "Current turn JSON:\n{}"}]}]
 
-        env = {"ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_CACHE_TTL": "1h", "ANTHROPIC_USE_TOOLS": "true"}
+        env = {"ANTHROPIC_MODEL": "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_CACHE_TTL": "1h", "ANTHROPIC_USE_TOOLS": "true"}
         with mock.patch.dict("os.environ", env, clear=False):
             with mock.patch.object(bot, "reserve_anthropic_request", return_value=mock.sentinel.budget):
                 with mock.patch.object(bot, "settle_anthropic_request", return_value=None):
@@ -892,6 +909,7 @@ class BotTests(unittest.TestCase):
     def test_upgraded_instances_use_adaptive_auto_tools_and_return_legal_actions(self) -> None:
         state = {"possible_actions": ["move", "ask_any"], "allowed_moves": ["e2e4", "d2d4"]}
         for instance, model, max_tokens in (
+            ("haiku", "claude-haiku-5-5", 32768),
             ("sonnet5", "claude-sonnet-5-5", 32768),
             ("opus48", "claude-opus-5-5", 32768),
             ("fable", "claude-fable-5-1", 32768),
@@ -908,7 +926,7 @@ class BotTests(unittest.TestCase):
                         "usage": {"input_tokens": 100, "output_tokens": 100},
                     }
                     with mock.patch.dict("os.environ", {}, clear=True):
-                        bot.load_env_file(bot.BASE_DIR / "instances" / f"{instance}.env.example")
+                        bot.load_env_file(bot.BASE_DIR / ".env.example" if instance == "haiku" else bot.BASE_DIR / "instances" / f"{instance}.env.example")
                         os.environ["ANTHROPIC_API_KEY"] = "test-key"
                         with mock.patch.object(bot, "reserve_anthropic_request", return_value=None):
                             with mock.patch.object(bot, "settle_anthropic_request", return_value=None):
@@ -929,7 +947,7 @@ class BotTests(unittest.TestCase):
                     ])
 
     def test_upgraded_model_uses_structured_json_when_tools_disabled(self) -> None:
-        for model in ("claude-opus-5-5", "claude-fable-5-1"):
+        for model in ("claude-haiku-5-5", "claude-opus-5-5", "claude-fable-5-1"):
             env = {"ANTHROPIC_MODEL": model, "ANTHROPIC_USE_TOOLS": "false", "ANTHROPIC_EFFORT": "max"}
             with self.subTest(model=model), mock.patch.dict("os.environ", env, clear=True):
                 with mock.patch.object(bot, "post_anthropic_request", return_value={}) as post:
@@ -1074,6 +1092,8 @@ class BotTests(unittest.TestCase):
         ):
             with self.subTest(block_type=block["type"]), mock.patch.dict(os.environ, {}, clear=True):
                 bot.load_env_file(bot.BASE_DIR / ".env.example")
+                os.environ["ANTHROPIC_MODEL"] = "claude-haiku-4-5-20251001"
+                os.environ["ANTHROPIC_THINKING_BUDGET_TOKENS"] = "16384"
                 response = {"content": [{"type": "thinking", "thinking": "ignore", "signature": "sig"}, block], "stop_reason": "end_turn"}
                 with mock.patch.object(bot, "post_anthropic_request", return_value=response) as post:
                     result = bot.call_anthropic_messages(system_prompt="system", messages=[])
@@ -1087,7 +1107,7 @@ class BotTests(unittest.TestCase):
                 self.assertEqual(bot.normalize_ranked_decisions(bot.parse_model_decision(result), {"possible_actions": ["move"], "allowed_moves": ["e2e4"]}), [{"action": "move", "uci": "e2e4"}])
 
     def test_manual_thinking_budget_validation_precedes_request(self) -> None:
-        for model, budget in (("claude-haiku-4-5-20251001", "0"), ("claude-haiku-4-5-20251001", "32768"), ("claude-opus-5-5", "16384"), ("claude-fable-5-1", "16384")):
+        for model, budget in (("claude-haiku-4-5-20251001", "0"), ("claude-haiku-4-5-20251001", "32768"), ("claude-haiku-5-5", "16384"), ("claude-opus-5-5", "16384"), ("claude-fable-5-1", "16384")):
             env = {"ANTHROPIC_MODEL": model, "ANTHROPIC_THINKING_BUDGET_TOKENS": budget, "ANTHROPIC_MAX_OUTPUT_TOKENS": "32768"}
             with self.subTest(model=model, budget=budget), mock.patch.dict(os.environ, env, clear=True):
                 with mock.patch.object(bot, "post_anthropic_request") as post, self.assertRaises(ValueError):

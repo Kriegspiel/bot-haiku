@@ -62,11 +62,11 @@ DEFAULT_ANTHROPIC_MONTHLY_BUDGET_USD = 18.0
 DEFAULT_PROVIDER_BUDGET_RESERVATION_TTL_SECONDS = 1800.0
 DEFAULT_MODEL_AVAILABILITY_REPORT_INTERVAL_SECONDS = 30.0
 USD_PER_MILLION_TOKENS = 1_000_000
-ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS = 1.00
-ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS = 5.00
-ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS = 0.10
-ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS = 1.25
-ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS = 2.00
+ANTHROPIC_HAIKU_INPUT_USD_PER_MILLION_TOKENS = 0.10
+ANTHROPIC_HAIKU_OUTPUT_USD_PER_MILLION_TOKENS = 0.50
+ANTHROPIC_HAIKU_CACHE_READ_INPUT_USD_PER_MILLION_TOKENS = 0.01
+ANTHROPIC_HAIKU_CACHE_WRITE_5M_USD_PER_MILLION_TOKENS = 0.125
+ANTHROPIC_HAIKU_CACHE_WRITE_1H_USD_PER_MILLION_TOKENS = 0.20
 LLM_BOT_CREATE_COOLDOWN_SECONDS_BY_TIER = {
     "t2": 3600,
     "tier2": 3600,
@@ -381,7 +381,9 @@ def anthropic_usage_cost_usd(usage: dict[str, Any], *, cache_ttl: str) -> float:
     output_tokens = usage_token_count(usage, "output_tokens")
     cache_read_tokens = usage_token_count(usage, "cache_read_input_tokens")
     cache_write_tokens = usage_token_count(usage, "cache_creation_input_tokens")
-    return (
+    multiplier = 5 if (os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5") == "claude-haiku-5-5"
+                       and input_tokens + cache_read_tokens + cache_write_tokens > 100_000) else 1
+    return multiplier * (
         input_tokens * anthropic_input_usd_per_million_tokens()
         + output_tokens * anthropic_output_usd_per_million_tokens()
         + cache_read_tokens * anthropic_cache_read_input_usd_per_million_tokens()
@@ -416,10 +418,12 @@ def reserve_anthropic_request(
     if input_rate <= 0 and anthropic_output_usd_per_million_tokens() <= 0:
         raise ProviderBudgetExhausted("anthropic_monthly_budget_pricing_unavailable")
 
+    # Reserve at the long-prompt tier so the shared cap stays conservative.
+    multiplier = 5 if payload.get("model") == "claude-haiku-5-5" else 1
     maximum_cost_usd = estimate_request_cost_upper_bound_usd(
         payload,
-        input_usd_per_million_tokens=input_rate,
-        output_usd_per_million_tokens=anthropic_output_usd_per_million_tokens(),
+        input_usd_per_million_tokens=input_rate * multiplier,
+        output_usd_per_million_tokens=anthropic_output_usd_per_million_tokens() * multiplier,
         maximum_output_tokens=int(payload.get("max_tokens") or anthropic_max_output_tokens()),
     )
     ledger = anthropic_monthly_budget_ledger()
@@ -1210,8 +1214,8 @@ def anthropic_use_tools() -> bool:
 
 
 def anthropic_effort() -> str:
-    raw = os.environ.get("ANTHROPIC_EFFORT", "low").strip().lower()
-    return raw if raw in {"low", "medium", "high", "xhigh", "max"} else "low"
+    raw = os.environ.get("ANTHROPIC_EFFORT", "xhigh").strip().lower()
+    return raw if raw in {"low", "medium", "high", "xhigh", "max"} else "xhigh"
 
 
 def anthropic_thinking_budget_tokens() -> int:
@@ -1275,7 +1279,7 @@ def anthropic_preflight_status(force: bool = False) -> tuple[bool, str]:
         )
 
     try:
-        model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
+        model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5").strip()
         response = requests.get(
             f"{anthropic_base_url()}/models/{quote(model, safe='')}",
             headers={
@@ -1337,7 +1341,7 @@ def call_anthropic_messages(
     system_prompt: str,
     messages: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5").strip()
     cache_ttl = anthropic_cache_ttl()
     cache_control = {"type": "ephemeral", "ttl": cache_ttl}
     payload: dict[str, Any] = {
@@ -1352,7 +1356,7 @@ def call_anthropic_messages(
         ],
         "messages": messages,
     }
-    adaptive_model = model in {"claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"}
+    adaptive_model = model in {"claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"}
     manual_budget = anthropic_thinking_budget_tokens()
     if manual_budget and adaptive_model:
         raise ValueError("Adaptive models use effort instead of a manual thinking budget")
@@ -1551,7 +1555,7 @@ def choose_ranked_actions(
         raw_response = call_anthropic_messages(system_prompt=system_prompt, messages=messages)
         log_anthropic_usage(
             game_id=game_id,
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip(),
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-5-5").strip(),
             payload=raw_response,
         )
         decisions = normalize_ranked_decisions(parse_model_decision(raw_response), state)
