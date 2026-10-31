@@ -21,7 +21,7 @@ Kriegspiel bot that asks an Anthropic model to choose the next action from the b
 ## Setup
 
 ```bash
-python3 -m venv .venv
+python3.15 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -196,3 +196,7 @@ turns. See the official [Fable 5.1 specifications](https://platform.claude.com/d
 and [migration requirements](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
 
 Haiku 5.5 pricing above is for up to 100,000 total prompt tokens, including cache reads/writes. Longer prompts cost five times those rates. Reservations always use that higher tier; returned usage determines settlement.
+
+### Python runtime
+
+Use CPython 3.15.2 (see `.python-version`). Production environments are managed by `ks-deploy python-runtime`; keep the system Python unchanged.
