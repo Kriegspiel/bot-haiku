@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.1.1 — Provider outage reporting
+
+- Keep provider failure reasons on one line within the backend availability API’s 500-character limit; describe HTML gateway errors by status instead of forwarding the page. Preserve unavailable status and report throttling during upstream outages.
+
 These notes summarize the bot runtime release history reconstructed from the
 current repository state. Add a new section at the top for runtime,
 deployment-facing, or user-visible bot behavior changes. Test-only and
