@@ -1,5 +1,9 @@
 # Release Notes
 
+## 1.1.2 — Fallback retry progress
+
+- Exclude already rejected actions from local fallback selection for the current turn, including provider failure and unavailable-key paths. Preserve the existing preference order, provider limits, budgets and model configuration.
+
 ## 1.1.1 — Provider outage reporting
 
 - Keep provider failure reasons on one line within the backend availability API’s 500-character limit; describe HTML gateway errors by status instead of forwarding the page. Preserve unavailable status and report throttling during upstream outages.
