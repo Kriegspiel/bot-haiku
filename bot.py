@@ -1520,9 +1520,15 @@ def normalize_ranked_decisions(payload: dict[str, Any], state: dict[str, Any]) -
     return normalized
 
 
-def fallback_decision(state: dict[str, Any]) -> dict[str, Any] | None:
+def fallback_decision(
+    state: dict[str, Any],
+    *,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     allowed_moves = state.get("allowed_moves") if isinstance(state.get("allowed_moves"), list) else []
     possible_actions = state.get("possible_actions") if isinstance(state.get("possible_actions"), list) else []
+    excluded = {(item.get("action"), item.get("uci")) for item in (exclude_actions or [])}
+    allowed_moves = [move for move in allowed_moves if ("move", move) not in excluded]
 
     if allowed_moves:
         ordered = sorted(allowed_moves)
@@ -1531,13 +1537,17 @@ def fallback_decision(state: dict[str, Any]) -> dict[str, Any] | None:
             if preferred in ordered:
                 return {"action": "move", "uci": preferred}
         return {"action": "move", "uci": ordered[0]}
-    if "ask_any" in possible_actions:
+    if "ask_any" in possible_actions and ("ask_any", None) not in excluded:
         return {"action": "ask_any", "uci": None}
     return None
 
 
-def fallback_ranked_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
-    decision = fallback_decision(state)
+def fallback_ranked_actions(
+    state: dict[str, Any],
+    *,
+    exclude_actions: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    decision = fallback_decision(state, exclude_actions=exclude_actions)
     return [decision] if decision is not None else []
 
 
@@ -1551,7 +1561,7 @@ def choose_ranked_actions(
     recent_updates: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, str | None]:
     if not anthropic_enabled():
-        return fallback_ranked_actions(state), "fallback_no_anthropic_key", None
+        return fallback_ranked_actions(state, exclude_actions=exclude_actions), "fallback_no_anthropic_key", None
 
     try:
         system_prompt = build_system_prompt(state.get("rule_variant", "berkeley_any"))
@@ -1579,7 +1589,7 @@ def choose_ranked_actions(
     except (KeyError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("model selection failed: %s", exc)
 
-    return fallback_ranked_actions(state), "fallback", None
+    return fallback_ranked_actions(state, exclude_actions=exclude_actions), "fallback", None
 
 
 def format_action(decision: dict[str, Any]) -> str:

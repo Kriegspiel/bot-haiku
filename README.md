@@ -200,3 +200,7 @@ Haiku 5.5 pricing above is for up to 100,000 total prompt tokens, including cach
 ### Python runtime
 
 Use CPython 3.15.2 (see `.python-version`). Production environments are managed by `ks-deploy python-runtime`; keep the system Python unchanged.
+
+Local fallback selection respects the current turn's rejected-action list.
+After a provider failure or missing key, it tries another available action
+rather than repeating a rejected move or question; a new turn starts fresh.
